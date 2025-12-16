@@ -1,0 +1,99 @@
+import /.at.lang.futures;
+import ~.data;
+import /.at.collections.java.hashmap;
+
+enableFutures(false);
+
+deftype Player;
+
+def log(text){
+  // to log the events on the current REPL
+  system.println(text);
+};
+
+def UUID := jlobby.java.util.UUID;
+
+/*
+def getActorId() { // Each User have different ID.
+  UUID.randomUUID().toString();
+};
+*/
+
+def WeKittensApp := jlobby.weKittens.WeKittensApp;
+
+def makeAmbientKittens() {
+  def gui ;
+
+  // Bookkeeping:
+  def otherPlayers := [];
+  def playersById  := HashMap.new();   // id -> far ref
+
+  def myUserId := UUID.randomUUID().toString(); // Create one time, stable vision.
+  log("myUserId = " + myUserId);
+
+  def localInterface := object: {
+
+      // called from WeKittensApp.cardPlayed(Card)
+      def cardPlayed(jCard) {
+
+        def aCard := atCardFromJCard(jCard);
+        log("Local card played: " + aCard.type + "|" + aCard.variant);
+
+        //DEFINE GAME RULES:
+        def allowed := true; // pour l’instant toujours vrai
+
+        if: !allowed then: {
+          log("Illegal move rejected");
+          false;
+        } else: {
+          // plus tard:
+          // broadcastPlayCard(aCard)
+          true;
+        };
+      };
+    };
+
+  def remoteInterface := object: {
+    def getUserId() { myUserId; };
+
+
+    def playCard(aCard, fromId) {
+        log("Received card " + aCard.type + " from " + fromId);
+        def jCard := jCardFromATCard(aCard);
+
+        // il faudra une méthode Java du style:
+        // gui.applyRemoteCard(jCard, fromId)
+      };
+  };
+
+  def pub := nil;
+  def sub := nil;
+
+  def goOnline() {
+    pub := export: remoteInterface as: Player;
+    sub := whenever: Player discovered: { |player|
+        if: !otherPlayers.contains(player) then: {
+            otherPlayers := otherPlayers + [player];
+        };
+
+         when: player<-getUserId()@FutureMessage becomes: { |id|
+                  log("Discovered playerId=" + id + " ref=" + player);
+         };
+    };
+  };
+
+  def goOffline(){
+    pub.cancel();
+    sub.cancel();
+  };
+
+  gui := WeKittensApp.new(localInterface); // Launch weKittesApp with the local AT interface.
+  goOnline();
+  system.println("Got Java GUI: " + gui);
+};
+
+network.online();
+
+makeAmbientKittens();
+
+`loaded;

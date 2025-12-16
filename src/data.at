@@ -1,0 +1,30 @@
+object: {
+
+ def JCard     := jlobby.weKittens.Card;
+ def JCardType := jlobby.weKittens.Card.CardType;
+
+  // Card AT vision:
+  def atCard := isolate: {
+    def type := "";      // ex: "attack", "defuse", ...
+    def variant := "";   // ex: "banjo", "taco", ...
+
+    def init(_type, _variant) {
+      type := _type;
+      variant := _variant;
+    };
+  };
+
+
+  // Java -> AT
+  def atCardFromJCard(jc) {
+    def t := jc.getType().toString();   // enum -> String
+    def v := jc.getVariant();
+    atCard.new(t, v);
+  };
+
+  // AT -> Java
+  def jCardFromATCard(ac) {
+    def jt := JCardType.valueOf(ac.type);
+    JCard.new(jt, ac.variant);
+  };
+};
