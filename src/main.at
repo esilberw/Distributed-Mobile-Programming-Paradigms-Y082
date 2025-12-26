@@ -1,83 +1,262 @@
 import /.at.lang.futures;
 import ~.data;
 import /.at.collections.java.hashmap;
+import /.at.support.timer exclude seconds, minutes, millisec;
 
 enableFutures(false);
 
 deftype Player;
 
-def log(text){
-  // to log the events on the current REPL
-  system.println(text);
-};
+// --- CONFIGURATION ---
+def LOBBY := 0;
+def PLAYING := 1;
+def DELAY_START_SESSION := 5.seconds;
+def MAX_PLAYERS := 4;
+def MIN_PLAYERS := 2;
+
+def log(text){ system.println("[AT] " + text); };
 
 def UUID := jlobby.java.util.UUID;
-
-/*
-def getActorId() { // Each User have different ID.
-  UUID.randomUUID().toString();
-};
-*/
-
 def WeKittensApp := jlobby.weKittens.WeKittensApp;
 
 def makeAmbientKittens() {
-  def gui ;
+  def gui;
 
-  // Bookkeeping:
-  def otherPlayers := [];
-  def playersById  := HashMap.new();   // id -> far ref
+  // --- ETAT ---
+  def myState := LOBBY;
+  def currentSessionId := nil;
+  def myUserId := UUID.randomUUID().toString();
 
-  def myUserId := UUID.randomUUID().toString(); // Create one time, stable vision.
+  // Gestion du timer
+  def isTimerRunning := false;
+
+  // Stockage
+  def playersById  := HashMap.new();
+  def playerStates := HashMap.new();
+  def playerIdsList := []; // Liste native safe pour itérer
+
+  def mySessionPlayers := [];
+
   log("myUserId = " + myUserId);
 
-  def localInterface := object: {
-
-      // called from WeKittensApp.cardPlayed(Card)
-      def cardPlayed(jCard) {
-
-        def aCard := atCardFromJCard(jCard);
-        log("Local card played: " + aCard.type + "|" + aCard.variant);
-
-        //DEFINE GAME RULES:
-        def allowed := true; // pour l’instant toujours vrai
-
-        if: !allowed then: {
-          log("Illegal move rejected");
-          false;
-        } else: {
-          // plus tard:
-          // broadcastPlayCard(aCard)
-          true;
-        };
-      };
-    };
-
-  def remoteInterface := object: {
-    def getUserId() { myUserId; };
-
-
-    def playCard(aCard, fromId) {
-        log("Received card " + aCard.type + " from " + fromId);
-        def jCard := jCardFromATCard(aCard);
-
-        // il faudra une méthode Java du style:
-        // gui.applyRemoteCard(jCard, fromId)
+  // --- HELPER: BROADCAST STATE ---
+  def broadcastMyState(newState) {
+      playerIdsList.each: { |id|
+          def p := playersById.get(id);
+          p<-updatePlayerState(myUserId, newState);
       };
   };
 
+  // --- HELPER: GET AVAILABLE PLAYERS ---
+  def getAvailablePlayers() {
+      def candidates := [];
+      playerIdsList.each: { |id|
+          def state := playerStates.get(id);
+          if: (state == nil) then: { state := LOBBY; };
+
+          if: (state == LOBBY) then: {
+              candidates := candidates + [ playersById.get(id) ];
+          };
+      };
+      candidates;
+  };
+
+  // --- NOUVEAU HELPER: AM I THE LEADER? ---
+  // Compare mon ID avec ceux des candidats.
+  // Retourne Vrai si mon ID est le plus "petit" (ordre alphabétique).
+  // Cela empêche que tout le monde lance la session en même temps apres un timeOut.
+  def amITheLeader(opponentsRefs) {
+      def iAmLeader := true;
+
+      // On doit retrouver les IDs à partir des Refs ou refaire la logique
+      // Plus simple : on ré-itère sur la liste native et on compare avec ceux qui sont LOBBY
+      playerIdsList.each: { |id|
+          def state := playerStates.get(id);
+          if: (state == nil) then: { state := LOBBY; };
+
+          if: (state == LOBBY) then: {
+             // FIX: Utilisation de <=> pour comparer les Strings
+             // Si id < myUserId (retourne -1), alors je ne suis pas le leader
+             if: ((id <=> myUserId) == -1) then: {
+                iAmLeader := false;
+             };
+          };
+      };
+      iAmLeader;
+  };
+
+  // --- FONCTION: EXECUTER LE LANCEMENT ---
+  def startSessionNow() {
+      if: (myState == LOBBY) then: {
+
+          def availablePlayers := getAvailablePlayers();
+
+          def opponents := [];
+          if: (availablePlayers.length > (MAX_PLAYERS - 1)) then: {
+              opponents := [availablePlayers[1], availablePlayers[2], availablePlayers[3]];
+          } else: {
+              opponents := availablePlayers;
+          };
+
+          // Changement d'état
+          myState := PLAYING;
+          currentSessionId := UUID.randomUUID().toString();
+          mySessionPlayers := opponents + [remoteInterface];
+
+          broadcastMyState(myState);
+
+          log(">>> STARTING SESSION (Host) : " + currentSessionId);
+          log(">>> Players : Me + " + opponents.length);
+
+          opponents.each: { |p|
+              p<-inviteToSession(currentSessionId, myUserId);
+          };
+
+          localInterface.showMessage("Started session (" + mySessionPlayers.length + " players)");
+      };
+  };
+
+  // --- LOGIQUE DE LOBBY ---
+  def checkLobbyStatus() {
+      if: (myState == LOBBY) then: {
+
+          def availableCount := getAvailablePlayers().length;
+          def totalCount := availableCount + 1;
+
+          log("Check Lobby: " + totalCount + " available players.");
+
+          // Case 1: 4 players -> start a session
+          if: (totalCount >= MAX_PLAYERS) then: {
+
+               // FIX: On vérifie le leader ici aussi pour éviter le double start immédiat
+               if: (amITheLeader(getAvailablePlayers())) then: {
+                   log("Lobby full (" + totalCount + ") & I am Leader -> Direct Start !");
+                   startSessionNow();
+               } else: {
+                   log("Lobby full (" + totalCount + ") but I am NOT Leader -> Waiting for invite.");
+               };
+          } else: {
+              // Case 2: 2 players, waiting for more players
+              if: (totalCount >= MIN_PLAYERS) then: {
+
+                  if: (!isTimerRunning) then: {
+                      log("Waiting for others (" + totalCount + " present)...");
+                      isTimerRunning := true;
+
+                      when: DELAY_START_SESSION elapsed: {
+                          isTimerRunning := false;
+
+                          if: (myState == LOBBY) then: {
+                              def finalCount := getAvailablePlayers().length + 1;
+
+                              if: (finalCount >= MIN_PLAYERS) then: {
+
+                                  // FIX: C'est ici que la magie opère.
+                                  // Seul le joueur avec le plus petit ID lance.
+                                  if: (amITheLeader(getAvailablePlayers())) then: {
+                                      log("Timeout elapsed & I am Leader. Starting session.");
+                                      startSessionNow();
+                                  } else: {
+                                      log("Timeout elapsed. I am NOT Leader (" + myUserId + "). Waiting for invite.");
+                                  };
+
+                              } else: {
+                                  log("Timeout elapsed but players left.");
+                              };
+                          } else: {
+                              log("Timeout ignored : session already started");
+                          };
+                      };
+                  } else: {
+                      log("Timer running...");
+                  };
+              };
+          };
+      };
+  };
+
+  // --- INTERFACE LOCALE ---
+  def localInterface := object: {
+      def cardPlayed(jCard) {
+        if: (myState == PLAYING) then: {
+             true;
+        } else: {
+             log("Not in a session!");
+             false;
+        };
+      };
+
+      def showMessage(msg) {
+          log("GUI MSG: " + msg);
+      };
+  };
+
+  // --- INTERFACE DISTANTE ---
+  def remoteInterface := object: {
+    def getUserId() { myUserId; };
+
+    def playCard(aCard, fromId) {
+        log("Received card " + aCard.type + " from " + fromId);
+    };
+
+    def updatePlayerState(id, state) {
+        log("UPDATE: Player " + id + " state -> " + state);
+        playerStates.put(id, state);
+        checkLobbyStatus();
+    };
+
+    def inviteToSession(sessionId, initiatorId) {
+        if: (myState == LOBBY) then: {
+            myState := PLAYING;
+            currentSessionId := sessionId;
+
+            broadcastMyState(myState);
+
+            log("INVITATION ACCEPTED from " + initiatorId);
+            localInterface.showMessage("Joined session of " + initiatorId);
+        } else: {
+            // Normalement n'arrive plus grâce à amITheLeader, sauf latence réseau extrême
+            log("INVITATION DECLINED: Busy.");
+        };
+    };
+  };
+
+  // --- RESEAU ---
   def pub := nil;
   def sub := nil;
 
   def goOnline() {
     pub := export: remoteInterface as: Player;
-    sub := whenever: Player discovered: { |player|
-        if: !otherPlayers.contains(player) then: {
-            otherPlayers := otherPlayers + [player];
-        };
 
+    sub := whenever: Player discovered: { |player|
          when: player<-getUserId()@FutureMessage becomes: { |id|
-                  log("Discovered playerId=" + id + " ref=" + player);
+             if: (!(playersById.containsKey(id))) then: {
+                 if: (id != myUserId) then: {
+                     log("New player: " + id);
+
+                     playersById.put(id, player);
+
+                     // FIX: Race Condition
+                     // Si j'ai déjà reçu un UPDATE (via updatePlayerState) pendant que je résolvais le Future,
+                     // playerStates contient déjà la vraie valeur (ex: 1).
+                     if: (!playerStates.containsKey(id)) then: {
+                        playerStates.put(id, LOBBY);
+                     };
+
+                     playerIdsList := playerIdsList + [id];
+
+                     player<-updatePlayerState(myUserId, myState);
+
+                     checkLobbyStatus();
+
+                     whenever: player disconnected: {
+                         log("Player " + id + " left.");
+                         playersById.remove(id);
+                         playerStates.remove(id);
+                         playerIdsList := playerIdsList.filter: { |itemId| itemId != id };
+                     };
+                 };
+             };
          };
     };
   };
@@ -87,13 +266,10 @@ def makeAmbientKittens() {
     sub.cancel();
   };
 
-  gui := WeKittensApp.new(localInterface); // Launch weKittesApp with the local AT interface.
+  gui := WeKittensApp.new(localInterface);
   goOnline();
-  system.println("Got Java GUI: " + gui);
+  system.println("WeKittens ready. GUI: " + gui);
 };
 
 network.online();
-
 makeAmbientKittens();
-
-`loaded;
