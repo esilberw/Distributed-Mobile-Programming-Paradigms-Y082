@@ -56,4 +56,11 @@ public class HandView extends JPanel {
         this.revalidate();
         this.repaint();
     }
+
+    public void removeAllCards() {
+        this.removeAll(); // Retire les composants graphiques (JPanel)
+        mCards.clear();   // Vide la liste mémoire
+        this.revalidate();
+        this.repaint();
+    }
 }

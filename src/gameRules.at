@@ -1,138 +1,331 @@
-import ~.data;
 def ArrayList := jlobby.java.util.ArrayList;
-def Collections := jlobby.java.util.Collections;
+def Deck := jlobby.weKittens.Deck;
+def CardType := jlobby.weKittens.Card.CardType;
 
-// --- LOGIQUE METIER (GAME MODEL) ---
-def makeGameRules(playerIds) {
+object: {
+  // --- IMPORTS ISOLES ---
+  def Data := object: { import ~.data; };
+  def Collections := object: { import /.at.collections.java.hashmap; };
 
-  // --- ETAT DU JEU (REPLIQUÉ) ---
-  def deck := [];
-  def discardPile := [];
-  def hands := []; // Liste de listes (Map ID -> Liste de cartes)
+  def makeGameRules(playerIds) {
+    def deck := [];
+    def hands := Collections.HashMap.new();
+    def activePlayers := playerIds;
+    def currentPlayerIndex := 0;
 
-  // Gestion du tour
-  def currentPlayerIndex := 0;
-  def activePlayers := playerIds; // IDs des joueurs vivants
-  def deadPlayers := [];          // IDs des joueurs morts
+    // --- GESTION DES TOURS ---
+    def turnsToTake := 1;
+    def nextTurnCount := 1;
 
-  // Configuration initiale
-  // On suppose que le deck est généré de manière déterministe ou transmis à l'init
-  def initGame(shuffledDeck) {
-      deck := shuffledDeck;
-      discardPile := [];
-      hands := object: { }; // Map vide
+    def deadPlayers := [];
+    def discardPile := [];
 
-      // Distribution (7 cartes + 1 Defuse)
-      activePlayers.each: { |pid|
-          // Logique de distribution simplifiée pour l'exemple
-          // Dans une vraie implémentation, on tire du deck
-          def hand := [];
-          hands.atPut(pid, hand);
-      };
-      system.println("[RULES] Jeu initialisé pour " + activePlayers.length + " joueurs.");
-  };
 
-  object: {
 
-      // --- REQUETES (Read-Only) ---
-      def getCurrentPlayer() { activePlayers[currentPlayerIndex + 1] }; // AT table index 1-based
-      def isDead(pid) { deadPlayers.contains(pid) };
+    // On garde l'accès à Data pour créer des cartes locales plus tard (defuse/exploding)
+    def localAtCard := Data.atCard;
 
-      // --- VALIDATION (Phase 1 du 2PC) ---
-      def validateMove(op) {
-          def pid := op.fromId;
+    isolate: {
+        def createInitialState() {
+            system.println("[RULES] Generation via Deck.java...");
 
-          // 1. Est-ce son tour ?
-          if: !(pid == getCurrentPlayer()) then: { ^false; };
+            def jDeck := Deck.new(activePlayers.length);
+            def initialHands := Collections.HashMap.new();
 
-          // 2. Est-ce qu'il est mort ?
-          if: (isDead(pid)) then: { ^false; };
+            // 1. Defuses
+            activePlayers.each: { |pid|
+                def hand := [];
+                def jCard := jDeck.takeCard(CardType.defuse);
+                hand := hand + [Data.atCardFromJCard(jCard)];
+                initialHands.put(pid, hand);
+            };
 
-          // 3. A-t-il la carte ?
-          def hand := hands.get(pid);
-          // (Simplification) On suppose qu'on vérifie si la carte est dans la main
-          // if: !hand.contains(op.card) ...
+            // 2. Main de départ
+            activePlayers.each: { |pid|
+                def hand := initialHands.get(pid);
+                1.to: 7 do: { |i|
+                    def jCard := jDeck.drawCard();
+                    if: !(jCard == nil) then: {
+                        hand := hand + [Data.atCardFromJCard(jCard)];
+                    };
+                };
+                initialHands.put(pid, hand);
+            };
 
-          true;
-      };
+            jDeck.addExplodingKittens();
 
-      // --- APPLICATION (Phase 2 du 2PC) ---
-      // Retourne un objet décrivant l'effet pour l'UI
-      def applyMove(op) {
-          def type := op.type;
-          def pid := op.fromId;
+            def finalDeck := [];
+            def pulling := true;
+            while: { pulling } do: {
+                def c := jDeck.drawCard();
+                if: (c == nil) then: { pulling := false; } else: {
+                    finalDeck := finalDeck + [Data.atCardFromJCard(c)];
+                };
+            };
 
-          if: (type == "PLAY_CARD") then: {
-              def card := op.card;
-              system.println("[RULES] " + pid + " joue " + card.type);
+            def serializableHands := [];
+            activePlayers.each: { |pid|
+                def h := initialHands.get(pid);
+                serializableHands := serializableHands + [[pid, h]];
+            };
 
-              // Mettre dans la défausse
-              discardPile := discardPile + [card];
+            isolate: {
+                def syncedDeck := finalDeck;
+                def syncedHandsData := serializableHands;
+            };
+        };
 
-              // --- LOGIQUE DES CARTES ---
-              if: (card.type == "attack") then: {
-                  // Exemple : le joueur suivant prend 2 tours (non implémenté full ici)
-                  advanceTurn();
-              };
-              if: (card.type == "skip") then: {
-                  advanceTurn();
-              };
-              // Note: Dans Exploding Kittens, on joue autant qu'on veut,
-              // le tour finit quand on pioche. Ici on simplifie pour l'exemple.
-          };
+        def initGame(config) {
+            deck := config.syncedDeck;
+            hands := Collections.HashMap.new();
+            def listData := config.syncedHandsData;
 
-          if: (type == "DRAW_CARD") then: {
-             // Piocher une carte
-             def card := deck.remove(1); // Prend la top card
+            listData.each: { |entry|
+                def pid := entry[1];
+                def hand := entry[2];
+                hands.put(pid, hand);
+            };
 
-             if: (card.type == "explodingkitten") then: {
-                 // GESTION DE LA MORT [Requirement 35]
-                 def hand := hands.get(pid);
-                 // A-t-il un Defuse ?
-                 // if: hand.hasDefuse ... sinon :
+            activePlayers := playerIds;
+            discardPile := [];
+            currentPlayerIndex := 0;
+            turnsToTake := 1;
+            nextTurnCount := 1;
+            deadPlayers := [];
 
-                 system.println("[RULES] BOOM! " + pid + " explose !");
-                 killPlayer(pid);
-                 ^ "PLAYER_EXPLODED";
-             } else: {
-                 // Ajouter à la main
-                 hands.get(pid).add(card);
-                 advanceTurn();
-             };
-          };
+            system.println("[RULES] INIT: Host " + getCurrentPlayer());
+        };
 
-          if: (type == "PLAYER_LEFT") then: {
-              // GESTION DECONNEXION [Requirement 39, 40]
-              system.println("[RULES] Nettoyage après départ de " + pid);
-              killPlayer(pid); // On le traite comme mort
+        // --- ACCESSEURS POUR LE GUI / MAIN.AT ---
+        def getCurrentPlayer() {
+            def p := nil;
+            if: !(activePlayers.isEmpty()) then: { p := activePlayers[currentPlayerIndex + 1]; };
+            p;
+        };
 
-              // "Putting all their cards on the discard pile"
-              def hand := hands.get(pid);
-              if: (hand != nil) then: {
-                  discardPile := discardPile + hand;
-                  hands.remove(pid);
-                  system.println("[RULES] Main de " + pid + " jetée à la défausse.");
-              };
-          };
+        def getTurnsLeft() {
+            turnsToTake;
+        };
 
-          "OK";
-      };
+        def getHand(pid) { hands.get(pid);
+            system.println("HAND" + pid + hands.get(pid));
+         };
 
-      // --- INTERNE ---
-      def advanceTurn() {
-          currentPlayerIndex := (currentPlayerIndex + 1) % activePlayers.length;
-          system.println("[RULES] C'est au tour de " + getCurrentPlayer());
-      };
+        def validateMove(op) {
+            def pid := op.fromId;
+            def isValid := true;
 
-      def killPlayer(pid) {
-          activePlayers := activePlayers.filter: { |p| p != pid };
-          deadPlayers := deadPlayers + [pid];
-          // Ajuster l'index si nécessaire
-          if: (currentPlayerIndex >= activePlayers.length) then: {
-              currentPlayerIndex := 0;
-          };
-      };
+            if: (deadPlayers.contains(pid)) then: {
+                isValid := false;
+            } else: {
+                if: (op.type == "PLAY_CARD") then: {
+                     if: !(op.card.type == "nope") then: {
+                         if: !(pid == getCurrentPlayer()) then: {
+                             system.println("[RULES] Not the turn of " + pid + " player");
+                             isValid := false;
+                         };
+                     };
+                };
+                if: (op.type == "DRAW_CARD") then: {
+                    if: !(pid == getCurrentPlayer()) then: { isValid := false; };
+                };
+                if: (op.type == "PLAY_CARD") then: {
+                   if: (isValid) then: {
+                       def h := getHand(pid);
+                       def has := false;
+                       h.each: { |c| if: (c.type == op.card.type) then: { has := true; }; };
+                       if: !has then: { isValid := false; };
+                   };
+                };
+            };
+            isValid;
+        };
 
-      def init(deck) { initGame(deck); };
+        def applyMove(op) {
+            def type := op.type;
+            def pid := op.fromId;
+            def result := "OK";
+
+            // --- PLAY CARD ---
+            if: (type == "PLAY_CARD") then: {
+                def card := op.card;
+                system.println("[JEU] " + pid + " joue " + card.type);
+
+                removeCardFromHand(pid, card);
+                discardPile := discardPile + [card];
+
+                if: (card.type == "attack") then: {
+                    nextTurnCount := 2;
+                    passTurnNoDraw();
+                    system.println("[SPECIAL] ATTACK. Next player takes 2 turns in a row.");
+                };
+
+                if: (card.type == "skip") then: {
+                    turnsToTake := turnsToTake - 1;
+                    system.println("[SPECIAL] SKIP. Turns left : " + turnsToTake);
+                    if: (turnsToTake <= 0) then: { passTurnNoDraw(); };
+                };
+
+                // --- SHUFFLE ---
+                if: (card.type == "shuffle") then: {
+                    system.println("[SPECIAL] SHUFFLE called.");
+
+                    def seeds := op.shuffleData;
+                    def len := deck.length;
+
+                    if: ((len > 1).and: { seeds.length > 0 }) then: {
+                        def i := 1;
+                        while: { i < (seeds.length - 1) } do: {
+
+                            def randA := seeds[i];
+                            def randB := seeds[i+1];
+
+                            def idxA := (randA * len).round() + 1;
+                            def idxB := (randB * len).round() + 1;
+
+                            if: (idxA > len) then: { idxA := len; };
+                            if: (idxB > len) then: { idxB := len; };
+                            if: (idxA < 1) then: { idxA := 1; };
+                            if: (idxB < 1) then: { idxB := 1; };
+
+                            def temp := deck[idxA];
+                            deck[idxA] := deck[idxB];
+                            deck[idxB] := temp;
+
+                            i := i + 2;
+                        };
+                        system.println("[SPECIAL] Deck shuffled.");
+                    };
+                };
+            };
+
+            // --- DRAW CARD ---
+            if: (type == "DRAW_CARD") then: {
+                system.println("[DRAW] " + pid + " draw...");
+
+                if: (deck.isEmpty()) then: {
+                    result := "EMPTY";
+                } else: {
+                    def card := deck[1];
+                    def newDeck := [];
+                    def len := deck.length;
+
+                    if: (len > 1) then: {
+                        2.to: len do: { |i| newDeck := newDeck + [deck[i]]; };
+                    };
+                    deck := newDeck;
+
+                    system.println("[DRAW] drawed card : " + card.type);
+
+                    if: (card.type == "exploding") then: {
+                        def hand := getHand(pid);
+                        def hasDefuse := false;
+                        hand.each: { |c| if: (c.type == "defuse") then: { hasDefuse := true; }; };
+
+                        if: (hasDefuse) then: {
+                            hands.put(pid, hands.get(pid) + [card]);
+                            result := "MUST_DEFUSE";
+                            system.println("[EXPLOSION] KITTEN ! Player has a defuse");
+                        } else: {
+                            killPlayer(pid);
+                            result := "DIED";
+                            system.println("[EXPLOSION] KITTEN ! Player " + pid  +" died");
+                        };
+
+                    } else: {
+                        hands.put(pid, hands.get(pid) + [card]);
+                        turnsToTake := turnsToTake - 1;
+                        system.println("[DRAW] Turns left : " + turnsToTake);
+
+                        if: (turnsToTake <= 0) then: { advanceTurn(); };
+                        result := card;
+                    };
+                };
+            };
+
+            // --- DEFUSE ---
+            if: (type == "DEFUSE_KITTEN") then: {
+                 def defuse := localAtCard.new("defuse", "");
+                 removeCardFromHand(pid, defuse);
+                 discardPile := discardPile + [defuse];
+
+                 def kitten := localAtCard.new("exploding", "");
+                 removeCardFromHand(pid, kitten);
+
+                 def idx := op.insertIndex;
+                 def insertDeck := [];
+                 def inserted := false;
+                 def i := 0;
+                 if: (idx == 0) then: { insertDeck := insertDeck + [kitten]; inserted := true; };
+                 deck.each: { |c|
+                     insertDeck := insertDeck + [c];
+                     i := i + 1;
+                     if: (i == idx) then: { insertDeck := insertDeck + [kitten]; inserted := true; };
+                 };
+                 if: !inserted then: { insertDeck := insertDeck + [kitten]; };
+                 deck := insertDeck;
+
+                 turnsToTake := turnsToTake - 1;
+                 if: (turnsToTake <= 0) then: { advanceTurn(); };
+            };
+
+            if: (type == "PLAYER_LEFT") then: {
+                killPlayer(pid);
+                def hand := getHand(pid);
+                if: !(hand == nil) then: { discardPile := discardPile + hand; hands.remove(pid); };
+            };
+            result;
+        };
+
+        def removeCardFromHand(pid, cardTemplate) {
+            def hand := getHand(pid);
+            def newHand := []; def removed := false;
+            hand.each: { |card|
+                if: ((!removed).and: {card.type == cardTemplate.type}) then: {
+                    removed := true;
+                } else: {
+                    newHand := newHand + [card];
+                };
+            };
+            hands.put(pid, newHand);
+        };
+
+        def passTurnNoDraw() {
+            system.println("[PASS] Turn Pass (skip)");
+            advanceTurn();
+        };
+
+        def advanceTurn() {
+            currentPlayerIndex := (currentPlayerIndex + 1) % activePlayers.length;
+            turnsToTake := nextTurnCount;
+            nextTurnCount := 1;
+
+            system.println("------------------------------------------");
+            system.println("[TURN] Player " + getCurrentPlayer());
+            system.println("[TURN] Number of turn(s) " + turnsToTake);
+            system.println("------------------------------------------");
+        };
+
+        def killPlayer(pid) {
+            def idxToRemove := -1;
+            def i := 0;
+            activePlayers.each: { |p| if: (p == pid) then: { idxToRemove := i; }; i := i + 1; };
+
+            if: (idxToRemove > -1) then: {
+                def jList := ArrayList.new(activePlayers);
+                jList.remove(idxToRemove);
+                activePlayers := jList.toTable();
+                deadPlayers := deadPlayers + [pid];
+
+                if: (idxToRemove < currentPlayerIndex) then: { currentPlayerIndex := currentPlayerIndex - 1; };
+                if: (currentPlayerIndex >= activePlayers.length) then: { currentPlayerIndex := 0; };
+
+                turnsToTake := 1;
+                nextTurnCount := 1;
+                system.println("[DEAD] Player " + pid + " is DEAD.");
+            };
+        };
+
+    };
   };
 };
