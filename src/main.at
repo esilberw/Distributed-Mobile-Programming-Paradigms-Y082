@@ -32,7 +32,7 @@ def makeAmbientKittens() {
   def myUserId := UUID.randomUUID().toString();
 
   // --- ETAT JEU ---
-  def gameModel := nil; // Le cerveau du jeu
+  def gameModel := nil;
 
   // Gestion du timer
   def isTimerRunning := false;
@@ -40,22 +40,20 @@ def makeAmbientKittens() {
   // Stockage Réseau
   def playersById  := HashMap.new();
   def playerStates := HashMap.new();
-  def playerIdsList := []; // Liste native safe
+  def playerIdsList := [];
 
-  // IDs des joueurs DE LA SESSION EN COURS (Moi + Opposants)
+  // IDs des joueurs DE LA SESSION EN COURS
   def sessionPlayerIds := [];
 
   log("myUserId = " + myUserId);
 
-  // --- HELPER: BROADCAST STATE ---
   def broadcastMyState(newState) {
       playerIdsList.each: { |id|
-          def p := playersById.get(id);
-          p<-updatePlayerState(myUserId, newState);
+          def player := playersById.get(id);
+          player<-updatePlayerState(myUserId, newState);
       };
   };
 
-  // --- HELPER: GET AVAILABLE PLAYERS ---
   def getAvailablePlayers() {
       def candidates := [];
       playerIdsList.each: { |id|
@@ -68,14 +66,12 @@ def makeAmbientKittens() {
       candidates;
   };
 
-  // --- HELPER: AM I THE LEADER? ---
   def amITheLeader(opponentsRefs) {
       def iAmLeader := true;
       playerIdsList.each: { |id|
           def state := playerStates.get(id);
           if: (state == nil) then: { state := LOBBY; };
           if: (state == LOBBY) then: {
-             // Si un ID est plus petit que le mien, je ne suis pas le leader
              if: ((id <=> myUserId) == -1) then: {
                 iAmLeader := false;
              };
@@ -84,41 +80,46 @@ def makeAmbientKittens() {
       iAmLeader;
   };
 
-  // --- HELPER: SYNCHRONISATION GUI JAVA ---
-  // C'est ici qu'on corrige la main aléatoire de Java
-  def updateJavaHand(pid) {
-      // 1. Vide l'écran Java
-      gui.clearHand();
+   def updateJavaHand(pid) {
+       gui.clearHand();
+       def myHand := gameModel.getHand(pid);
 
-      // 2. Récupère la VRAIE main depuis AT
-      def myHand := gameModel.getHand(pid);
+       if: (myHand != nil) then: {
+           system.println("[GUI] Synchronisation de " + myHand.length + " cartes...");
+           myHand.each: { |atCard|
+               gui.addCardToHand(atCard.type, atCard.variant);
+           };
+       };
+   };
 
-      // 3. Remplit l'écran Java
-      myHand.each: { |atCard|
-          gui.addCardToHand(atCard.type, atCard.variant);
+  def updateTurnDisplay() {
+      def currentPid := gameModel.getCurrentPlayer();
+      def turns := gameModel.getTurnsLeft();
+      def isMe := (currentPid == myUserId);
+
+      def msg := "";
+      if: isMe then: {
+           msg := "Your turn | " + turns + " turns left";
+      } else: {
+           msg := "Not your turn !";
       };
-      system.println("[GUI] Main synchronisée (" + myHand.length + " cartes).");
+
+      gui.setTurnStatus(msg, isMe);
   };
 
-  // --- FONCTION: LANCER LA SESSION (Host) ---
   def startSessionNow() {
       if: (myState == LOBBY) then: {
 
           def availablePlayers := getAvailablePlayers();
           def opponents := [];
 
-          // Selection des joueurs (Max 3 opposants)
           if: (availablePlayers.length > (MAX_PLAYERS - 1)) then: {
               opponents := [availablePlayers[1], availablePlayers[2], availablePlayers[3]];
           } else: {
               opponents := availablePlayers;
           };
 
-          // Construction de la liste des IDs de session
           sessionPlayerIds := [myUserId];
-          // Note: On doit retrouver les IDs des opponents.
-          // Pour simplifier, on itère sur playerIdsList et on garde ceux qui sont dans 'opponents'
-          // (Ou on stocke l'ID dans l'objet Remote, mais ici on fait simple)
           playerIdsList.each: { |id|
              def pRef := playersById.get(id);
              if: (opponents.contains(pRef)) then: {
@@ -126,27 +127,22 @@ def makeAmbientKittens() {
              };
           };
 
-          // 1. INITIALISATION DU JEU (Côté Leader)
-          // On utilise gameRules qui va appeler Deck.java
-         // CORRECTION : Appel direct de la fonction importée (plus de prefixe 'gameRules.')
-         gameModel := makeGameRules(sessionPlayerIds);
+          gameModel := makeGameRules(sessionPlayerIds);
+          def config := gameModel.createInitialState();
 
-         def config := gameModel.createInitialState();
-         gameModel.init(config);
+          gameModel.initGame(config);
 
-          // 2. CHANGEMENT D'ETAT
           myState := PLAYING;
           currentSessionId := UUID.randomUUID().toString();
           broadcastMyState(myState);
+          updateTurnDisplay();
 
-          // 3. MISE A JOUR GUI LOCALE
           updateJavaHand(myUserId);
           gui.initializeSession(sessionPlayerIds.length);
 
           log(">>> STARTING SESSION : " + currentSessionId);
           log(">>> Players : " + sessionPlayerIds.length);
 
-          // 4. INVITATION DES AUTRES (Avec la Config !)
           opponents.each: { |p|
               p<-inviteToSession(currentSessionId, myUserId, config, sessionPlayerIds);
           };
@@ -155,7 +151,6 @@ def makeAmbientKittens() {
       };
   };
 
-  // --- LOGIQUE DE LOBBY (Ton code original) ---
   def checkLobbyStatus() {
       if: (myState == LOBBY) then: {
           def availableCount := getAvailablePlayers().length;
@@ -198,98 +193,238 @@ def makeAmbientKittens() {
       };
   };
 
-  // --- INTERFACE LOCALE (GUI -> AT) ---
   def localInterface := object: {
+      def playerDrewCard() {
+              def decision := false;
+              if: (myState == PLAYING) then: {
+                   def op := isolate: {
+                       def uuid := UUID.randomUUID().toString();
+                       def type := "DRAW_CARD";
+                       def card := nil;
+                       def fromId := myUserId;
+                       def sessionId := currentSessionId;
+                   };
 
-      // Appelé quand tu cliques sur une carte
-      def cardPlayed(jCard) {
-        def decision := false;
+                   def isLegal := gameModel.validateMove(op);
 
-        if: (myState == PLAYING) then: {
-             // 1. Conversion
-             def aCard := atCardFromJCard(jCard);
+                   if: (isLegal) then: {
+                       log("Draw Validated locally. Committing...");
+                       performTwoPhaseCommit(op);
+                       decision := true;
+                   } else: {
+                       log("Draw Refused (Not your turn?).")
+                   };
+              } else: { log("Not in session!"); };
+              decision;
+            };
 
-             // 2. Création Opération
-             def op := isolate: {
-                 def uuid := UUID.randomUUID().toString();
-                 def type := "PLAY_CARD";
-                 def card := aCard;
-                 def fromId := myUserId;
-                 def sessionId := currentSessionId;
-             };
+     def cardPlayed(jCard) {
+             def decision := false;
 
-             // 3. Validation Optimiste (On demande au modèle si c'est possible)
-             def isLegal := gameModel.validateMove(op);
+             if: (myState == PLAYING) then: {
+                  def aCard := atCardFromJCard(jCard);
 
-             if: (isLegal) then: {
-                 // C'est valide : on lance le consensus
-                 performTwoPhaseCommit(op);
-                 decision := true; // On dit "Oui" à Java pour qu'il retire la carte visuellement
+                  if: (aCard.type == "defuse") then: {
+                      system.println("[GUI] Defuse détecté. Libération UI + Popup Async.");
+                      decision := true;
+
+                      when: 0.seconds elapsed: {
+                          def max := gameModel.getDeckSize();
+                          def idx := gui.askInsertionIndex(max);
+
+                          def op := isolate: {
+                              def uuid := UUID.randomUUID().toString();
+                              def type := "DEFUSE_KITTEN";
+                              def card := aCard;
+                              def fromId := myUserId;
+                              def sessionId := currentSessionId;
+                              def insertIndex := idx;
+                              def shuffleData := [];
+                          };
+
+                          if: (gameModel.validateMove(op)) then: {
+                              performTwoPhaseCommit(op);
+                          } else: {
+                              log("Defuse annulé ou invalide.");
+                              updateJavaHand(myUserId);
+                          };
+                      };
+
+                  } else: {
+                      def seeds := [];
+                      if: (aCard.type == "shuffle") then: {
+                          system.println("[GUI] Génération des graines pour Shuffle...");
+                          1.to: 200 do: { |i| seeds := seeds + [jlobby.java.lang.Math.random()] };
+                      };
+
+                      def op := isolate: {
+                          def uuid := UUID.randomUUID().toString();
+                          def type := "PLAY_CARD";
+                          def card := aCard;
+                          def fromId := myUserId;
+                          def sessionId := currentSessionId;
+                          def shuffleData := seeds;
+                      };
+
+                      if: (gameModel.validateMove(op)) then: {
+                          performTwoPhaseCommit(op);
+                          decision := true;
+                      } else: {
+                          log("Move refused by local rules.");
+                      };
+                  };
              } else: {
-                 log("Move refused by local rules.");
+                  log("Not in a session!");
              };
-        } else: {
-             log("Not in a session!");
-        };
 
-        decision; // Retourne true/false à Java
-      };
+             decision;
+           };
 
-      def showMessage(msg) { log("GUI MSG: " + msg); };
-  };
+           def showMessage(msg) { log("GUI MSG: " + msg); };
+       };
 
-  // --- 2PC CONSENSUS ---
   def performTwoPhaseCommit(op) {
-      // Récupérer les références distantes des joueurs de la session
       def voters := [];
       sessionPlayerIds.each: { |id|
           if: !(id == myUserId) then: {
-              voters := voters + [playersById.get(id)];
+              def pRef := playersById.get(id);
+              if: !(pRef == nil) then: {
+                  voters := voters + [pRef];
+              };
           };
       };
 
-      // Phase 1 : Prepare
       def futures := voters.map: { |p| p<-prepare(op)@FutureMessage };
 
       when: (group: futures) becomes: { |votes|
           def allAgreed := true;
           votes.each: { |v| if: (v == false) then: { allAgreed := false; }; };
 
-          // Re-validation locale (au cas où l'état a changé entre temps)
           if: !(gameModel.validateMove(op)) then: { allAgreed := false; };
 
           if: (allAgreed) then: {
-              // Phase 2 : Commit Global
               commitLocally(op);
               voters.each: { |p| p<-commit(op) };
-          } else: {
-              log("2PC ABORTED.");
-              // Idéalement : remettre la carte dans la main Java si c'était moi
-          };
+          } else: { log("2PC ABORTED."); };
       };
   };
 
-  def commitLocally(op) {
-      def res := gameModel.applyMove(op);
+ def commitLocally(op) {
+       def res := gameModel.applyMove(op);
 
-      // Si j'ai pioché, je dois afficher la carte
-      if: (op.type == "DRAW_CARD") then: {
-          if: (op.fromId == myUserId) then: {
-              if: !(res == "DIED") then: {
-                  gui.addCardToHand(res.type, res.variant);
-              };
+       // --- 1. PIOCHE (DRAW) ---
+       if: (op.type == "DRAW_CARD") then: {
+
+           if: (op.fromId == myUserId) then: {
+               // C'est MOI
+
+               def status := res;
+               def cardObj := nil;
+
+               // Extraction sûre du résultat complexe
+               try: {
+                   if: (res.length == 2) then: {
+                       status := res[1];
+                       cardObj := res[2];
+                   };
+               } catch: { |e| status := res; };
+
+               if: (status == "MUST_DEFUSE") then: {
+                    // On passe la vraie variante à l'UI
+                    def variant := "a";
+                    if: (cardObj != nil) then: { variant := cardObj.variant; };
+                    gui.showExplosionAlert(variant);
+
+                    if: (cardObj != nil) then: {
+                        gui.addCardToHand(cardObj.type, cardObj.variant);
+                    };
+                    localInterface.showMessage("DEFUSE REQUIS !");
+               };
+
+               if: ((status == "DIED").or: {status == "WINNER"}) then: {
+                    def variant := "a";
+                    if: (cardObj != nil) then: { variant := cardObj.variant; };
+                    gui.showExplosionAlert(variant);
+                    gui.showDeathMessage();
+               };
+
+               if: (status == "EMPTY") then: {
+                    localInterface.showMessage("La pioche est vide !");
+               };
+
+               // --- CORRECTION CRITIQUE ICI : NESTED IFS ---
+               // On remplace le "and:" chaîné par des if imbriqués
+               if: (status != "DIED") then: {
+                   if: (status != "WINNER") then: {
+                       if: (status != "MUST_DEFUSE") then: {
+                           if: (status != "EMPTY") then: {
+                                // Ici res est directement la carte (comportement standard)
+                                gui.addCardToHand(res.type, res.variant);
+                           };
+                       };
+                   };
+               };
+
+           } else: {
+               // ADVERSAIRE
+               def status := res;
+               try: { if: (res.length == 2) then: { status := res[1]; }; } catch: { |e| };
+
+               if: ((status == "DIED").or: {status == "WINNER"}) then: {
+                    markDeadOpponent(op.fromId);
+                    if: (status == "WINNER") then: { gui.showWinMessage(); };
+               };
+           };
+       };
+
+       // --- 2. DECONNEXION ---
+       if: (op.type == "PLAYER_LEFT") then: {
+            localInterface.showMessage("Joueur " + op.fromId + " a quitté la partie.");
+            markDeadOpponent(op.fromId);
+
+            if: (res == "WINNER") then: {
+                gui.showWinMessage();
+            };
+       };
+
+       // --- 3. DEFUSE ---
+       if: (op.type == "DEFUSE_KITTEN") then: {
+           localInterface.showMessage("Ouf ! Bombe désamorcée par " + op.fromId);
+           if: (op.fromId == myUserId) then: {
+               updateJavaHand(myUserId);
+           };
+       };
+
+       // --- 4. PLAY CARD ---
+       if: (op.type == "PLAY_CARD") then: {
+           if: !(op.fromId == myUserId) then: {
+                gui.playCardOpponent(op.card.type, op.card.variant);
+           };
+       };
+
+       updateTurnDisplay();
+   };
+
+     def markDeadOpponent(deadId) {
+          def myIndex := 0;
+          def oppIndex := 0;
+          def count := sessionPlayerIds.length;
+
+          0.to: (count - 1) do: { |i|
+              if: (sessionPlayerIds[i+1] == myUserId) then: { myIndex := i; };
+              if: (sessionPlayerIds[i+1] == deadId) then: { oppIndex := i; };
           };
-      };
 
-      // Gestion des effets visuels adverses (Optionnel : playCard sur DrawingView)
-      if: (op.type == "PLAY_CARD") then: {
-          if: !(op.fromId == myUserId) then: {
-               gui.playCardOpponent(op.card.type, op.card.variant);
+          def relative := (oppIndex - myIndex + count) % count;
+
+          if: (count == 2) then: {
+              if: (relative == 1) then: { relative := 2; };
           };
-      };
-  };
 
-  // --- INTERFACE DISTANTE (AT -> AT) ---
+          system.println("[GUI] Marking DEAD oppId: " + deadId + " at relative pos: " + relative);
+          gui.markOpponentDead(relative);
+     };
+
   def remoteInterface := object: {
     def getUserId() { myUserId; };
 
@@ -299,23 +434,20 @@ def makeAmbientKittens() {
         checkLobbyStatus();
     };
 
-    // MODIFIÉ : Reçoit config + liste des joueurs
     def inviteToSession(sessionId, initiatorId, config, pList) {
         if: (myState == LOBBY) then: {
             myState := PLAYING;
             currentSessionId := sessionId;
             sessionPlayerIds := pList;
 
-            // 1. INIT MODEL (Follower)
-            // CORRECTION : Appel direct ici aussi
             gameModel := makeGameRules(sessionPlayerIds);
-            gameModel.init(config);
-            // 2. UPDATE GUI
+            gameModel.initGame(config);
+
             updateJavaHand(myUserId);
             gui.initializeSession(sessionPlayerIds.length);
+            updateTurnDisplay();
 
             broadcastMyState(myState);
-
             log("INVITATION ACCEPTED from " + initiatorId);
             localInterface.showMessage("Joined session.");
         } else: {
@@ -323,12 +455,10 @@ def makeAmbientKittens() {
         };
     };
 
-    // Handlers 2PC
     def prepare(op) { gameModel.validateMove(op); };
     def commit(op) { commitLocally(op); };
   };
 
-  // --- RESEAU ---
   def pub := nil;
   def sub := nil;
 
@@ -356,11 +486,14 @@ def makeAmbientKittens() {
                          playerStates.remove(id);
                          playerIdsList := playerIdsList.filter: { |itemId| itemId != id };
 
-                         // FAULT TOLERANCE : Si en jeu, on vire le joueur
-                         if: (myState == PLAYING) then: {
-                             // Logique d'éjection via Game Rules (voir discussions précédentes)
-                             // gameModel.applyMove(PLAYER_LEFT...)
-                             // À ajouter selon besoin de robustesse
+                         if: ((myState == PLAYING).and: { sessionPlayerIds.contains(id) }) then: {
+                             log("Active player disconnected. Removing...");
+                             def op := isolate: {
+                                 def type := "PLAYER_LEFT";
+                                 def fromId := id;
+                             };
+                             commitLocally(op);
+                             localInterface.showMessage("Player " + id + " disconnected.");
                          };
                      };
                  };

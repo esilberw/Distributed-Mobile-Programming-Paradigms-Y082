@@ -99,6 +99,7 @@ public class Deck {
 
     public void addExplodingKittens() {
         int explodingCount = 0;
+        System.out.println("NOMBRE DE EXPLODING KITTEN:" +  (playerCount  -1));
 
         for (int i=0; i<2; i++) {
             addCard(this.cards, Card.CardType.exploding, "a", 1, explodingCount++, playerCount - 1);
