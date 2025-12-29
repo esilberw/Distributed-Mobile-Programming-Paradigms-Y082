@@ -211,6 +211,104 @@ def makeAmbientKittens() {
               } else: { log("Not in session!"); };
               decision;
             };
+      // FONCTION UTILITAIRE : Conversion Relative -> ID
+           // (On la définit ici dans l'objet pour qu'elle soit accessible par les méthodes)
+           def getTargetIdFromRelative(targetRel) {
+                 def targetId := nil;
+                 if: (targetRel != -1) then: {
+                       def myIndex := 0;
+                       def count := sessionPlayerIds.length;
+                       def i := 0;
+                       sessionPlayerIds.each: { |pid|
+                           if: (pid == myUserId) then: { myIndex := i; };
+                           i := i + 1;
+                       };
+                       def offset := targetRel;
+                       if: (count == 2) then: { offset := 1; };
+                       def targetIndex := (myIndex + offset) % count;
+                       targetId := sessionPlayerIds[targetIndex + 1];
+                 };
+                 targetId;
+           };
+
+           // NOUVEAU : Récupère la taille réelle de la main
+           def getOpponentHandSize(targetRel) {
+               def size := 1; // Valeur par défaut safe
+               if: (myState == PLAYING) then: {
+                   def targetId := getTargetIdFromRelative(targetRel);
+                   if: (targetId != nil) then: {
+                       def hand := gameModel.getHand(targetId);
+                       if: (hand != nil) then: {
+                           size := hand.length;
+                           system.println("[CHEAT] Taille main cible (" + targetId + ") : " + size);
+                       };
+                   };
+               };
+               size;
+           };
+
+           // PAIR PLAYED
+           def pairPlayed(jCard, targetRel, stealIdx) {
+               def decision := false;
+               if: (myState == PLAYING) then: {
+                   def aCard := atCardFromJCard(jCard);
+
+                   // Réutilisation de la fonction utilitaire
+                   def targetId := getTargetIdFromRelative(targetRel);
+
+                   if: (targetId != nil) then: {
+                       system.println("[PAIR] Playing pair on " + targetId + " index " + stealIdx);
+                       def op := isolate: {
+                           def uuid := UUID.randomUUID().toString();
+                           def type := "PLAY_PAIR";
+                           def card := aCard;
+                           def fromId := myUserId;
+                           def sessionId := currentSessionId;
+                           def targetPlayer := targetId;
+                           def stealIndex := stealIdx;
+                       };
+
+                       if: (gameModel.validateMove(op)) then: {
+                           performTwoPhaseCommit(op);
+                           decision := true;
+                       } else: {
+                           log("Pair move refused.");
+                       };
+                   };
+               };
+               decision;
+           };
+
+           def triplePlayed(jCard, targetRel, rType, rVar) {
+                    def decision := false;
+                    if: (myState == PLAYING) then: {
+                        def aCard := atCardFromJCard(jCard);
+                        def targetId := getTargetIdFromRelative(targetRel);
+
+                        if: (targetId != nil) then: {
+                            system.println("[TRIPLE] Asking " + targetId + " for " + rType + " (" + rVar + ")");
+                            def op := isolate: {
+                                def uuid := UUID.randomUUID().toString();
+                                def type := "PLAY_TRIPLE";
+                                def card := aCard;
+                                def fromId := myUserId;
+                                def sessionId := currentSessionId;
+                                def targetPlayer := targetId;
+                                // Champs spécifiques à la demande
+                                def reqType := rType;
+                                def reqVariant := rVar;
+                            };
+
+                            if: (gameModel.validateMove(op)) then: {
+                                performTwoPhaseCommit(op);
+                                decision := true;
+                            } else: {
+                                log("Triple move refused.");
+                            };
+                        };
+                    };
+                    decision;
+                };
 
      // MODIFICATION : Retour à la version sans Data.
      def cardPlayed(jCard, targetInfo) {
@@ -491,8 +589,127 @@ def makeAmbientKittens() {
            };
        };
 
+       // --- 6. PLAY PAIR (NOUVEAU) ---
+              if: (op.type == "PLAY_PAIR") then: {
+                  // Si je suis l'attaquant
+                  if: (op.fromId == myUserId) then: {
+                      updateJavaHand(myUserId); // Met à jour pour retirer les 2 cartes
+                      localInterface.showMessage("Vol lancé sur joueur " + op.targetPlayer);
+                  } else: {
+                      // Si je suis l'attaqué (Victime)
+                      if: (op.targetPlayer == myUserId) then: {
+                          system.println("[PAIR] On me vole une carte index " + op.stealIndex);
+
+                          def myHand := gameModel.getHand(myUserId);
+                          if: ((myHand != nil).and: { myHand.length > 0 }) then: {
+                              // Calcul de l'index réel (1-based from UI -> 0-based Array)
+                              // On utilise modulo pour éviter crash si index hors bornes
+                              def idx := (op.stealIndex - 1) % myHand.length;
+                              def stolenCard := myHand[idx + 1]; // AT array base 1
+
+                              localInterface.showMessage("On vous a volé : " + stolenCard.type);
+
+                              // Envoi automatique de la carte (GIVE_CARD)
+                              def giveOp := isolate: {
+                                  def uuid := UUID.randomUUID().toString();
+                                  def type := "GIVE_CARD";
+                                  def fromId := myUserId;
+                                  def toId := op.fromId; // Je donne à l'attaquant
+                                  def card := stolenCard;
+                                  def sessionId := currentSessionId;
+                              };
+
+                              // Pas besoin de délai artificiel ici
+                              performTwoPhaseCommit(giveOp);
+                          };
+                      } else: {
+                          // Spectateur
+                          localInterface.showMessage(op.fromId + " vole une carte à " + op.targetPlayer);
+                      };
+                  };
+              };
+              // --- 7. PLAY TRIPLE (NOUVEAU) ---
+                     if: (op.type == "PLAY_TRIPLE") then: {
+
+                         // Si je suis l'attaquant
+                         if: (op.fromId == myUserId) then: {
+                             updateJavaHand(myUserId); // Mes 3 cartes disparaissent
+                             log("Demande de " + op.reqType + " envoyée à " + op.targetPlayer);
+                         } else: {
+
+                             if: (op.targetPlayer == myUserId) then: {
+                                                system.println("[TRIPLE] On me demande : " + op.reqType + " / " + op.reqVariant);
+
+                                                def myHand := gameModel.getHand(myUserId);
+                                                def foundCard := nil;
+
+                                                if: (myHand != nil) then: {
+                                                    myHand.each: { |c|
+                                                        // CORRECTION : Comparaison directe (replace n'existe pas et n'est pas nécessaire ici)
+                                                        if: (foundCard == nil) then: {
+                                                            // On convertit tout en string pour être sûr (au cas où ce serait des objets Java)
+                                                            def cType := c.type + "";
+                                                            def cVar := c.variant + "";
+                                                            def rType := op.reqType + "";
+                                                            def rVar := op.reqVariant + "";
+
+                                                            // Comparaison insensible à la casse pour le type (optionnel mais plus robuste)
+                                                            // Mais l'égalité stricte == marche très bien pour les chaînes AT
+                                                            if: (cType == rType) then: {
+                                                                if: (cVar == rVar) then: {
+                                                                    foundCard := c;
+                                                                };
+                                                            };
+                                                        };
+                                                    };
+                                                };
+                                 if: (foundCard != nil) then: {
+                                     log("Zut ! J'ai la carte " + foundCard.type + ". Je dois la donner.");
+
+                                     def giveOp := isolate: {
+                                         def uuid := UUID.randomUUID().toString();
+                                         def type := "GIVE_CARD";
+                                         def fromId := myUserId;
+                                         def toId := op.fromId;
+                                         def card := foundCard;
+                                         def sessionId := currentSessionId;
+                                     };
+                                     performTwoPhaseCommit(giveOp);
+                                 } else: {
+                                     log("Ouf ! Je n'ai pas la carte demandée (" + op.reqType + ").");
+                                     // Rien à faire, l'attaquant ne reçoit rien.
+                                 };
+                             } else: {
+                                 // Spectateur
+                                log(op.fromId + " demande une carte précise à " + op.targetPlayer);
+                             };
+                         };
+                     };
+
        updateTurnDisplay();
    };
+   // --- AJOUT : Fonction manquante pour calculer la position relative ---
+        def getRelativeIndex(targetId) {
+             def myIndex := -1;
+             def targetIndex := -1;
+             def count := sessionPlayerIds.length;
+             def i := 0;
+
+             sessionPlayerIds.each: { |pid|
+                 if: (pid == myUserId) then: { myIndex := i; };
+                 if: (pid == targetId) then: { targetIndex := i; };
+                 i := i + 1;
+             };
+
+             def relative := (targetIndex - myIndex + count) % count;
+
+             // Adaptation pour le 1v1 (l'adversaire est en face = 2)
+             if: (count == 2) then: {
+                 if: (relative == 1) then: { relative := 2; };
+             };
+
+             relative;
+        };
 
      def markDeadOpponent(deadId) {
           def myIndex := -1;

@@ -139,215 +139,266 @@ object: {
                        if: !has then: { isValid := false; };
                    };
                 };
-            };
-            isValid;
-        };
+                if: (op.type == "PLAY_PAIR") then: {
+                                   if: (isValid) then: {
+                                       def h := getHand(pid);
+                                       def count := 0;
 
-        def applyMove(op) {
-            def type := op.type;
-            def pid := op.fromId;
-            def result := "OK";
-
-
-            // --- PLAY CARD ---
-                        if: (type == "PLAY_CARD") then: {
-                            def card := op.card;
-                            system.println("[JEU] " + pid + " joue " + card.type);
-
-                            removeCardFromHand(pid, card);
-                            discardPile := discardPile + [card];
-
-                            // --- ATTACK ---
-                            if: (card.type == "attack") then: {
-                                def remaining := turnsToTake - 1;
-                                if: (remaining < 0) then: { remaining := 0; };
-                                nextTurnCount := remaining + 2;
-                                system.println("[ATTACK] Stacking! Next player will have " + nextTurnCount + " turns.");
-                                passTurnNoDraw();
-                            };
-
-                            // --- SKIP ---
-                            if: (card.type == "skip") then: {
-                                turnsToTake := turnsToTake - 1;
-                                if: (turnsToTake <= 0) then: { passTurnNoDraw(); };
-                            };
-
-                            // --- SHUFFLE ---
-                            if: (card.type == "shuffle") then: {
-                                // ... (votre code shuffle existant) ...
-                                // (Laissez le bloc shuffle tel quel)
-                                 def seeds := op.shuffleData;
-                                def len := deck.length;
-                                if: ((len > 1).and: { seeds.length > 0 }) then: {
-                                    def i := 1;
-                                    while: { i < (seeds.length - 1) } do: {
-                                        def randA := seeds[i];
-                                        def randB := seeds[i+1];
-                                        def idxA := (randA * len).round() + 1;
-                                        def idxB := (randB * len).round() + 1;
-                                        if: (idxA > len) then: { idxA := len; };
-                                        if: (idxB > len) then: { idxB := len; };
-                                        if: (idxA < 1) then: { idxA := 1; };
-                                        if: (idxB < 1) then: { idxB := 1; };
-                                        def temp := deck[idxA];
-                                        deck[idxA] := deck[idxB];
-                                        deck[idxB] := temp;
-                                        i := i + 2;
-                                    };
-                                };
-                            };
-
-                            // --- SEE THE FUTURE (AJOUT) ---
-                            if: (card.type == "future") then: {
-                                def peekCards := [];
-                                def count := 0;
-                                def idx := 1; // Deck commence à 1
-
-                                // On regarde jusqu'à 3 cartes, ou moins si le deck est petit
-                                while: { (count < 3).and: { idx <= deck.length } } do: {
-                                    peekCards := peekCards + [deck[idx]];
-                                    idx := idx + 1;
-                                    count := count + 1;
-                                };
-
-                                // On renvoie un résultat spécial contenant les cartes
-                                result := ["PEEK_FUTURE", peekCards];
-                            };
-                        };
-
-            // --- DRAW CARD ---
-            if: (type == "DRAW_CARD") then: {
-                if: (deck.isEmpty()) then: {
-                    result := "EMPTY";
-                } else: {
-                    def oldSize := deck.length;
-                    def card := deck[1];
-
-                    // --- DECOUPAGE DU DECK (While) ---
-                    def newDeck := [];
-                    def len := deck.length;
-                    def idx := 2;
-                    while: { idx <= len } do: {
-                        newDeck := newDeck + [deck[idx]];
-                        idx := idx + 1;
-                    };
-                    deck := newDeck;
-
-                    system.println("[DRAW] " + pid + " drew " + card.type + ". Deck size: " + oldSize + " -> " + deck.length);
-
-                   if: (card.type == "exploding") then: {
-                                           def hand := getHand(pid);
-                                           def hasDefuse := false;
-                                           hand.each: { |c| if: (c.type == "defuse") then: { hasDefuse := true; }; };
-
-                                           if: (hasDefuse) then: {
-                                               hands.put(pid, hands.get(pid) + [card]);
-                                               // On renvoie [STATUS, CARD] pour avoir l'info visuelle
-                                               result := ["MUST_DEFUSE", card];
-                                           } else: {
-                                               killPlayer(pid);
-                                               // MEME EN MOURANT, on renvoie la carte pour l'afficher
-                                               if: (activePlayers.length == 1) then: {
-                                                   result := ["WINNER", card];
-                                               } else: {
-                                                   result := ["DIED", card];
+                                       // On doit avoir au moins 2 cartes de ce type/variant
+                                       h.each: { |c|
+                                           // CORRECTION : Imbrication des IF pour éviter le bug "and:then:"
+                                           if: (c.type == op.card.type) then: {
+                                               if: (c.variant == op.card.variant) then: {
+                                                   count := count + 1;
                                                };
                                            };
-                    } else: {
-                        hands.put(pid, hands.get(pid) + [card]);
-                        turnsToTake := turnsToTake - 1;
-                        if: (turnsToTake <= 0) then: { advanceTurn(); };
-                        result := card;
-                    };
-                };
-            };
+                                       };
 
-            // --- DEFUSE ---
-            if: (type == "DEFUSE_KITTEN") then: {
-                 system.println("[DEFUSE] Start. Deck size: " + deck.length);
-
-                 def hand := getHand(pid);
-                 def defuseCard := nil;
-                 def kittenCard := nil;
-
-                 hand.each: { |c|
-                    if: ((defuseCard == nil).and: { c.type == "defuse" }) then: { defuseCard := c; };
-                    if: ((kittenCard == nil).and: { c.type == "exploding" }) then: { kittenCard := c; };
-                 };
-
-                 if: (defuseCard != nil) then: {
-                    removeCardFromHand(pid, defuseCard);
-                    discardPile := discardPile + [defuseCard];
-                 };
-
-                 if: (kittenCard != nil) then: {
-                    removeCardFromHand(pid, kittenCard);
-
-                     def idx := op.insertIndex;
-                     def insertDeck := [];
-                     def inserted := false;
-                     def i := 0;
-
-                     if: (idx == 0) then: { insertDeck := insertDeck + [kittenCard]; inserted := true; };
-
-                     deck.each: { |c|
-                         insertDeck := insertDeck + [c];
-                         i := i + 1;
-                         if: ((i == idx).and: { !inserted }) then: {
-                            insertDeck := insertDeck + [kittenCard];
-                            inserted := true;
-                         };
-                     };
-                     if: !inserted then: { insertDeck := insertDeck + [kittenCard]; };
-
-                     deck := insertDeck;
-                     system.println("[DEFUSE] SUCCESS. Kitten re-inserted at " + idx + ". New Deck size: " + deck.length);
-                 } else: {
-                     system.println("[CRITICAL ERROR] No kitten found in hand! Creating backup.");
-                     def backupBomb := localAtCard.new("exploding", "a");
-                     deck := deck + [backupBomb];
-                 };
-
-                 turnsToTake := turnsToTake - 1;
-                 if: (turnsToTake <= 0) then: { advanceTurn(); };
-                 result := "DEFUSED";
-            };
-            // >>> INSÉREZ LE BLOC ICI <<<
-                        // --- GIVE CARD (Pour Favor) ---
-                        if: (type == "GIVE_CARD") then: {
-                            def card := op.card;
-                            def targetId := op.toId; // Celui qui reçoit
-
-                            system.println("[GIVE] " + pid + " donne " + card.type + " à " + targetId);
-
-                            // 1. Retirer de la main du donneur (pid)
-                            removeCardFromHand(pid, card);
-
-                            // 2. Ajouter à la main du receveur (targetId)
-                            def targetHand := getHand(targetId);
-                            if: (targetHand != nil) then: {
-                                targetHand := targetHand + [card];
-                                hands.put(targetId, targetHand);
+                                       if: (count < 2) then: { isValid := false; };
+                                   };
+                                };
+                                // VALIDATION TRIPLE
+                                                if: (op.type == "PLAY_TRIPLE") then: {
+                                                   if: (isValid) then: {
+                                                       def h := getHand(pid);
+                                                       def count := 0;
+                                                       h.each: { |c|
+                                                           if: (c.type == op.card.type) then: {
+                                                               if: (c.variant == op.card.variant) then: {
+                                                                   count := count + 1;
+                                                               };
+                                                           };
+                                                       };
+                                                       // Il faut 3 cartes identiques
+                                                       if: (count < 3) then: { isValid := false; };
+                                                   };
+                                                };
                             };
-
-                            result := "GIVEN";
+                            isValid;
                         };
-                        // >>> FIN DU BLOC <<<
 
+        def applyMove(op) {
+                    def type := op.type;
+                    def pid := op.fromId;
+                    def result := "OK";
 
-            if: (type == "PLAYER_LEFT") then: {
-                killPlayer(pid);
-                def hand := getHand(pid);
-                if: !(hand == nil) then: { discardPile := discardPile + hand; hands.remove(pid); };
+                    // --- 1. PLAY CARD (Classique) ---
+                    if: (type == "PLAY_CARD") then: {
+                        def card := op.card;
+                        system.println("[JEU] " + pid + " joue " + card.type);
 
-                if: (activePlayers.length == 1) then: {
-                    result := "WINNER";
-                } else: {
-                    result := "DIED";
+                        removeCardFromHand(pid, card);
+                        discardPile := discardPile + [card];
+
+                        // --- ATTACK ---
+                        if: (card.type == "attack") then: {
+                            def remaining := turnsToTake - 1;
+                            if: (remaining < 0) then: { remaining := 0; };
+                            nextTurnCount := remaining + 2;
+                            system.println("[ATTACK] Stacking! Next player will have " + nextTurnCount + " turns.");
+                            passTurnNoDraw();
+                        };
+
+                        // --- SKIP ---
+                        if: (card.type == "skip") then: {
+                            turnsToTake := turnsToTake - 1;
+                            if: (turnsToTake <= 0) then: { passTurnNoDraw(); };
+                        };
+
+                        // --- SHUFFLE ---
+                        if: (card.type == "shuffle") then: {
+                             def seeds := op.shuffleData;
+                             def len := deck.length;
+                             if: ((len > 1).and: { seeds.length > 0 }) then: {
+                                def i := 1;
+                                while: { i < (seeds.length - 1) } do: {
+                                    def randA := seeds[i];
+                                    def randB := seeds[i+1];
+                                    def idxA := (randA * len).round() + 1;
+                                    def idxB := (randB * len).round() + 1;
+                                    if: (idxA > len) then: { idxA := len; };
+                                    if: (idxB > len) then: { idxB := len; };
+                                    if: (idxA < 1) then: { idxA := 1; };
+                                    if: (idxB < 1) then: { idxB := 1; };
+                                    def temp := deck[idxA];
+                                    deck[idxA] := deck[idxB];
+                                    deck[idxB] := temp;
+                                    i := i + 2;
+                                };
+                            };
+                        };
+
+                        // --- SEE THE FUTURE ---
+                        if: (card.type == "future") then: {
+                            def peekCards := [];
+                            def count := 0;
+                            def idx := 1;
+                            while: { (count < 3).and: { idx <= deck.length } } do: {
+                                peekCards := peekCards + [deck[idx]];
+                                idx := idx + 1;
+                                count := count + 1;
+                            };
+                            result := ["PEEK_FUTURE", peekCards];
+                        };
+
+                    }; // <--- IMPORTANT : On ferme PLAY_CARD ici !
+
+                    // --- 2. PLAY PAIR (Maintenant au même niveau que PLAY_CARD) ---
+                    if: (type == "PLAY_PAIR") then: {
+                        def card := op.card;
+                        system.println("[JEU] " + pid + " joue PAIRE de " + card.type);
+
+                        // On retire les 2 cartes [cite: 8]
+                        removeCardFromHand(pid, card);
+                        removeCardFromHand(pid, card);
+
+                        discardPile := discardPile + [card, card];
+                        result := "PAIR_OK";
+                    };
+
+                    // --- 3. PLAY TRIPLE (Au même niveau aussi) ---
+                    if: (type == "PLAY_TRIPLE") then: {
+                        def card := op.card;
+                        system.println("[JEU] " + pid + " joue TRIPLE de " + card.type);
+
+                        // On retire les 3 cartes
+                        removeCardFromHand(pid, card);
+                        removeCardFromHand(pid, card);
+                        removeCardFromHand(pid, card);
+
+                        discardPile := discardPile + [card, card, card];
+                        result := "TRIPLE_OK";
+                    };
+
+                    // --- 4. DRAW CARD ---
+                    if: (type == "DRAW_CARD") then: {
+                         // ... (Votre code DRAW_CARD existant, inchangé) ...
+                         // Copiez-collez tout le bloc DRAW_CARD ici
+                          if: (deck.isEmpty()) then: {
+                            result := "EMPTY";
+                        } else: {
+                            def oldSize := deck.length;
+                            def card := deck[1];
+
+                            // --- DECOUPAGE DU DECK (While) ---
+                            def newDeck := [];
+                            def len := deck.length;
+                            def idx := 2;
+                            while: { idx <= len } do: {
+                                newDeck := newDeck + [deck[idx]];
+                                idx := idx + 1;
+                            };
+                            deck := newDeck;
+
+                            system.println("[DRAW] " + pid + " drew " + card.type + ". Deck size: " + oldSize + " -> " + deck.length);
+                            if: (card.type == "exploding") then: {
+                                                   def hand := getHand(pid);
+                                                   def hasDefuse := false;
+                                                   hand.each: { |c| if: (c.type == "defuse") then: { hasDefuse := true; }; };
+                                                   if: (hasDefuse) then: {
+                                                       hands.put(pid, hands.get(pid) + [card]);
+                                                       // On renvoie [STATUS, CARD] pour avoir l'info visuelle
+                                                       result := ["MUST_DEFUSE", card];
+                                                   } else: {
+                                                       killPlayer(pid);
+                                                       // MEME EN MOURANT, on renvoie la carte pour l'afficher
+                                                       if: (activePlayers.length == 1) then: {
+                                                            result := ["WINNER", card];
+                                                       } else: {
+                                                           result := ["DIED", card];
+                                                       };
+                                                   };
+                            } else: {
+                                hands.put(pid, hands.get(pid) + [card]);
+                                turnsToTake := turnsToTake - 1;
+                                if: (turnsToTake <= 0) then: { advanceTurn(); };
+                                result := card;
+                            };
+                        };
+                    };
+
+                    // ... (Autres blocs DEFUSE, GIVE_CARD, PLAYER_LEFT restent inchangés) ...
+                     if: (type == "DEFUSE_KITTEN") then: {
+                         // ... (votre code DEFUSE existant) ...
+                          system.println("[DEFUSE] Start. Deck size: " + deck.length);
+                         def hand := getHand(pid);
+                         def defuseCard := nil;
+                         def kittenCard := nil;
+
+                         hand.each: { |c|
+                             if: ((defuseCard == nil).and: { c.type == "defuse" }) then: { defuseCard := c; };
+                             if: ((kittenCard == nil).and: { c.type == "exploding" }) then: { kittenCard := c; };
+                         };
+                         if: (defuseCard != nil) then: {
+                            removeCardFromHand(pid, defuseCard);
+                            discardPile := discardPile + [defuseCard];
+                         };
+
+                         if: (kittenCard != nil) then: {
+                            removeCardFromHand(pid, kittenCard);
+                             def idx := op.insertIndex;
+                             def insertDeck := [];
+                             def inserted := false;
+                             def i := 0;
+                             if: (idx == 0) then: { insertDeck := insertDeck + [kittenCard]; inserted := true; };
+
+                             deck.each: { |c|
+                                 insertDeck := insertDeck + [c];
+                                 i := i + 1;
+                                 if: ((i == idx).and: { !inserted }) then: {
+                                    insertDeck := insertDeck + [kittenCard];
+                                    inserted := true;
+                                 };
+                             };
+                             if: !inserted then: { insertDeck := insertDeck + [kittenCard]; };
+
+                             deck := insertDeck;
+                             system.println("[DEFUSE] SUCCESS. Kitten re-inserted at " + idx + ". New Deck size: " + deck.length);
+                         } else: {
+                             system.println("[CRITICAL ERROR] No kitten found in hand! Creating backup.");
+                             def backupBomb := localAtCard.new("exploding", "a");
+                             deck := deck + [backupBomb];
+                         };
+
+                         turnsToTake := turnsToTake - 1;
+                         if: (turnsToTake <= 0) then: { advanceTurn(); };
+                         result := "DEFUSED";
+                     };
+
+                     // --- GIVE CARD (Pour Favor / Vol) ---
+                                 if: (type == "GIVE_CARD") then:{
+                                     def card := op.card;
+                                     def targetId := op.toId; // Celui qui reçoit (l'attaquant)
+
+                                     system.println("[GIVE] " + pid + " donne " + card.type + " à " + targetId);
+
+                                     // 1. Retirer de la main du donneur (la victime, pid)
+                                     removeCardFromHand(pid, card);
+
+                                     // 2. Ajouter à la main du receveur (l'attaquant, targetId)
+                                     def targetHand := getHand(targetId);
+                                     if: (targetHand != nil) then: {
+                                         targetHand := targetHand + [card];
+                                         hands.put(targetId, targetHand);
+                                     };
+
+                                     result := "GIVEN";
+                                 };
+
+                     if: (type == "PLAYER_LEFT") then: {
+                          // ... (votre code LEFT existant) ...
+                           killPlayer(pid);
+                        def hand := getHand(pid);
+                        if: !(hand == nil) then: { discardPile := discardPile + hand; hands.remove(pid); };
+                        if: (activePlayers.length == 1) then: {
+                            result := "WINNER";
+                        } else: {
+                            result := "DIED";
+                        };
+                     };
+
+                    result;
                 };
-            };
-            result;
-        };
 
         def removeCardFromHand(pid, cardTemplate) {
                     def hand := getHand(pid);

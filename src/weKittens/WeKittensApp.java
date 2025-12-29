@@ -179,7 +179,6 @@ public class WeKittensApp implements HandAction {
         });
     }
 
-    // --- CORRECTION SEE THE FUTURE ---
     public void showSeeTheFuture(ArrayList types, ArrayList variants) {
         SwingUtilities.invokeLater(() -> {
             JDialog d = new JDialog((JFrame) SwingUtilities.getWindowAncestor(drawingView), "SEE THE FUTURE (Top 3)", true);
@@ -193,11 +192,9 @@ public class WeKittensApp implements HandAction {
                 String tStr = (tObj != null) ? tObj.toString() : "cat";
                 String vStr = (vObj != null) ? vObj.toString() : "";
 
-                // NETTOYAGE DES GUILLEMETS (Vital pour ImageIO)
                 tStr = tStr.replace("\"", "");
                 vStr = vStr.replace("\"", "");
 
-                // Conversion sécurisée
                 Card.CardType typeEnum = Card.CardType.cat;
                 try {
                     typeEnum = Card.CardType.valueOf(tStr);
@@ -209,7 +206,6 @@ public class WeKittensApp implements HandAction {
 
                 try {
                     Card c = new Card(typeEnum, vStr);
-                    // Image mise à l'échelle
                     Image rawImg = c.getAWTImage();
                     if (rawImg != null) {
                         ImageIcon icon = new ImageIcon(rawImg.getScaledInstance(200, 280, Image.SCALE_SMOOTH));
@@ -364,10 +360,158 @@ public class WeKittensApp implements HandAction {
         return -1;
     }
 
+    // Demander le TYPE de carte voulu
+    private String askDesiredType() {
+        // Liste des types possibles (basé sur l'Enum)
+        Card.CardType[] types = Card.CardType.values();
+        String[] typeNames = new String[types.length];
+        for(int i=0; i<types.length; i++) typeNames[i] = types[i].name();
+
+        // CORRECTION : Appel direct sans invokeAndWait
+        String selection = (String) JOptionPane.showInputDialog(
+                null,
+                "TRIPLE COMBO: Name a specific card TYPE!",
+                "Name The Card",
+                JOptionPane.QUESTION_MESSAGE,
+                null,
+                typeNames,
+                "defuse"
+        );
+
+        return selection;
+    }
+
+    // Demander la VARIANTE voulue
+    // NOUVELLE VERSION : Menu déroulant basé sur le type choisi
+    // NOUVELLE VERSION : Menu déroulant strict basé sur vos fichiers images
+    private String askDesiredVariant(String selectedType) {
+        String typeLower = (selectedType != null) ? selectedType.toLowerCase() : "";
+        String[] options;
+
+        switch (typeLower) {
+            case "attack": // attack_mine.png, attack_space.png
+                options = new String[]{"mine", "space"};
+                break;
+            case "cat": // cat_beard.png, cat_cattermelon.png, etc.
+                options = new String[]{"beard", "cattermelon", "potato", "rainbow", "taco"};
+                break;
+            case "defuse": // defuse_banjo.png, defuse_catnip.png, defuse_laser.png
+                options = new String[]{"banjo", "catnip", "laser"};
+                break;
+            case "favor": // favor_card.png -> variante "card"
+                options = new String[]{"card"};
+                break;
+            case "future": // future_bear.png, future_goggles.png, etc.
+                options = new String[]{"bear", "goggles", "mantis", "pig", "pigacorn"};
+                break;
+            case "nope": // nope_card.png -> variante "card"
+                options = new String[]{"card"};
+                break;
+            case "shuffle": // shuffle_litterbox.png, shuffle_scratch.png
+                options = new String[]{"litterbox", "scratch"};
+                break;
+            case "skip": // skip_bunnyraptor.png, skip_nap.png, skip_sprint.png
+                options = new String[]{"bunnyraptor", "nap", "sprint"};
+                break;
+            case "exploding": // exploding_a.png, exploding_b.png
+                options = new String[]{"a", "b"};
+                break;
+            default:
+                // Fallback si le type est inconnu
+                options = new String[]{"default"};
+                break;
+        }
+
+        // Affichage du menu déroulant
+        String result = (String) JOptionPane.showInputDialog(
+                null,
+                "TRIPLE COMBO: Select the specific VARIANT for " + selectedType + "!",
+                "Select The Variant",
+                JOptionPane.QUESTION_MESSAGE,
+                null,
+                options,      // La liste stricte des choix
+                options[0]    // Le choix par défaut
+        );
+
+        return (result != null) ? result : "";
+    }
     @Override
     public boolean cardPlayed(Card card) {
-        int targetInfo = -1;
 
+        // 1. COMPTAGE DES CARTES IDENTIQUES
+        int sameCount = 0;
+        for(Card c : internalCardList) {
+            if (c.getType() == card.getType() && c.getVariant().equals(card.getVariant())) {
+                sameCount++;
+            }
+        }
+
+        // 2. DETERMINATION DU MODE DE JEU
+        boolean playTriple = false;
+        boolean playPair = false;
+
+        if (sameCount >= 3) {
+            // Choix entre Triple, Paire ou Simple
+            Object[] options = {"TRIPLE (Name Card)", "PAIR (Random Steal)", "Single"};
+            int choice = JOptionPane.showOptionDialog(null,
+                    "You have " + sameCount + " matching cards!\nChoose your combo:",
+                    "Combo Master",
+                    JOptionPane.YES_NO_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE, null,
+                    options, options[0]);
+
+            if (choice == 0) playTriple = true;
+            else if (choice == 1) playPair = true;
+
+        } else if (sameCount >= 2) {
+            // Choix entre Paire ou Simple
+            int choice = JOptionPane.showOptionDialog(null,
+                    "You have a pair of " + card.getType() + "!\nPlay as Pair to steal?",
+                    "Combo Detected",
+                    JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null,
+                    new Object[]{"Play PAIR", "Single"}, "Single");
+            if (choice == 0) playPair = true;
+        }
+
+        // 3. EXECUTION TRIPLE
+        if (playTriple) {
+            int targetRel = askTargetPlayerInternal();
+            if (targetRel == -1) return false;
+
+            // On demande d'abord le TYPE (ex: "defuse")
+            String reqType = askDesiredType();
+            if (reqType == null) return false;
+
+            // MODIFICATION : On passe le type choisi pour filtrer les variantes
+            String reqVar = askDesiredVariant(reqType);
+
+            // Si l'utilisateur annule le choix de la variante
+            if (reqVar.isEmpty()) return false;
+
+            if (at.triplePlayed(card, targetRel, reqType, reqVar)) {
+                drawingView.playCard(card);
+                drawingView.repaint();
+                return true;
+            }
+            return false;
+        }
+
+        // 4. EXECUTION PAIRE (Code existant)
+        if (playPair) {
+            int targetRel = askTargetPlayerInternal();
+            if (targetRel == -1) return false;
+            int realHandSize = at.getOpponentHandSize(targetRel);
+            int stealIdx = askStealIndex(realHandSize);
+
+            if (at.pairPlayed(card, targetRel, stealIdx)) {
+                drawingView.playCard(card);
+                drawingView.repaint();
+                return true;
+            }
+            return false;
+        }
+
+        // 5. EXECUTION SIMPLE (Code existant)
+        int targetInfo = -1;
         if (card.getType() == Card.CardType.favor) {
             targetInfo = askTargetPlayerInternal();
             if (targetInfo == -1) return false;
@@ -379,5 +523,22 @@ public class WeKittensApp implements HandAction {
             return true;
         }
         return false;
+    }
+
+    // Méthode de demande d'index (simplifiée)
+    private int askStealIndex(int maxCards) {
+        if (maxCards < 1) maxCards = 1;
+        int result = 1;
+
+        String input = JOptionPane.showInputDialog(null,
+                "PAIR COMBO: Steal a random card!\nEnter a number between 1 and " + maxCards,
+                "1");
+        try {
+            result = Integer.parseInt(input);
+            if (result < 1) result = 1;
+            if (result > maxCards) result = maxCards;
+        } catch (Exception e) { result = 1; }
+
+        return result;
     }
 }
