@@ -12,13 +12,16 @@ public class WeKittensApp implements HandAction {
     private final HandView handsView;
     private final JLabel statusLabel;
 
-    // Liste interne
     private final ArrayList<Card> internalCardList;
 
-    // Verrou pour empêcher les mises à jour de statut si mort
     private boolean isDead = false;
+    private boolean isVictory = false;
+
+    // AJOUT : Stockage du nombre de joueurs
+    private int currentTotalPlayers = 2;
 
     public WeKittensApp(ATLocalInterface at) {
+        // ... (CONSTRUCTEUR INCHANGÉ) ...
         this.at = at;
         JFrame frame = new JFrame("weKittens");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -51,13 +54,12 @@ public class WeKittensApp implements HandAction {
         JButton btnDraw = new JButton("Draw Card (End Turn)");
         btnDraw.addActionListener(e -> {
             if (at != null) {
-                if (!at.playerDrewCard()) JOptionPane.showMessageDialog(frame, "Ce n'est pas votre tour !");
+                if (!at.playerDrewCard()) JOptionPane.showMessageDialog(frame, "Not your turn, please wait !");
             }
         });
         actionPanel.add(btnDraw);
         bottomPanel.add(actionPanel, BorderLayout.NORTH);
 
-        // Initialisation correcte
         internalCardList = new ArrayList<>();
 
         handsView = new HandView(internalCardList, this);
@@ -76,9 +78,7 @@ public class WeKittensApp implements HandAction {
 
     public void setTurnStatus(String message, boolean isMyTurn) {
         SwingUtilities.invokeLater(() -> {
-            // Si mort, on ignore les mises à jour "Not your turn"
-            if (isDead) return;
-
+            if (isDead || isVictory) return;
             if (statusLabel != null) {
                 statusLabel.setText(message);
                 statusLabel.setForeground(isMyTurn ? Color.GREEN : Color.RED);
@@ -88,6 +88,9 @@ public class WeKittensApp implements HandAction {
 
     public void initializeSession(int totalPlayers) {
         SwingUtilities.invokeLater(() -> {
+            // AJOUT : On mémorise le nombre de joueurs pour Favor
+            this.currentTotalPlayers = totalPlayers;
+
             drawingView.setLeftPlayerCount(0);
             drawingView.setTopPlayerCount(0);
             drawingView.setRightPlayerCount(0);
@@ -99,6 +102,7 @@ public class WeKittensApp implements HandAction {
         });
     }
 
+    // ... (clearHand, addCardToHand, playCardOpponent, showExplosionAlert, showDeathMessage, markOpponentDead, showWinMessage, askInsertionIndex, askCardToGive INCHANGÉS) ...
     public void clearHand() {
         SwingUtilities.invokeLater(() -> {
             try {
@@ -148,16 +152,12 @@ public class WeKittensApp implements HandAction {
         });
     }
 
-    // MODIFICATION ICI : On accepte la variante en paramètre
     public void showExplosionAlert(String variant) {
         SwingUtilities.invokeLater(() -> {
             JDialog d = new JDialog((JFrame) SwingUtilities.getWindowAncestor(drawingView), "ATTENTION !", true);
             d.setLayout(new BorderLayout());
-
-            // On utilise la variante passée (ou "a" par défaut)
-            String v = (variant != null && !variant.isEmpty()) ? variant : "a";
-            Card bomb = new Card(Card.CardType.exploding, v);
-
+            String variantDet = (variant != null && !variant.isEmpty()) ? variant : "a";
+            Card bomb = new Card(Card.CardType.exploding, variantDet);
             ImageIcon icon = new ImageIcon(bomb.getAWTImage().getScaledInstance(300, 420, Image.SCALE_SMOOTH));
             JLabel label = new JLabel(icon);
             label.setHorizontalAlignment(SwingConstants.CENTER);
@@ -182,7 +182,7 @@ public class WeKittensApp implements HandAction {
             try {
                 internalCardList.clear();
                 handsView.removeAll();
-                JLabel deadLabel = new JLabel("MODE SPECTATEUR");
+                JLabel deadLabel = new JLabel("SPECTATOR MOD");
                 deadLabel.setForeground(Color.LIGHT_GRAY);
                 deadLabel.setFont(new Font("Arial", Font.BOLD, 20));
                 deadLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
@@ -202,21 +202,33 @@ public class WeKittensApp implements HandAction {
     public void markOpponentDead(int relativeIndex) {
         SwingUtilities.invokeLater(() -> {
             System.out.println("GUI MARK DEAD: " + relativeIndex);
-            if (relativeIndex == 1) drawingView.markDead("LEFT");
-            else if (relativeIndex == 2) drawingView.markDead("TOP");
-            else if (relativeIndex == 3) drawingView.markDead("RIGHT");
+
+            if (relativeIndex == 1) {
+                drawingView.markDead("LEFT");
+                drawingView.setLeftPlayerCount(0);
+            }
+            else if (relativeIndex == 2) {
+                drawingView.markDead("TOP");
+                drawingView.setTopPlayerCount(0);
+            }
+            else if (relativeIndex == 3) {
+                drawingView.markDead("RIGHT");
+                drawingView.setRightPlayerCount(0);
+            }
+
             drawingView.repaint();
         });
     }
 
     public void showWinMessage() {
         SwingUtilities.invokeLater(() -> {
-            statusLabel.setText("VICTOIRE !!!");
+            if (isDead) return;
+            isVictory = true;
+            statusLabel.setText("VICTORY !");
             statusLabel.setForeground(Color.GREEN);
-
             JOptionPane.showMessageDialog(null,
-                    "FELICITATIONS !\nVous êtes le dernier survivant.\nVOUS AVEZ GAGNE !",
-                    "VICTOIRE",
+                    "BRAVO !\nYou are the last survivor.\nYou WIN !",
+                    "VICTORY",
                     JOptionPane.INFORMATION_MESSAGE);
         });
     }
@@ -236,9 +248,78 @@ public class WeKittensApp implements HandAction {
         return result[0];
     }
 
+    public String askCardToGive() {
+        if (internalCardList.isEmpty()) return null;
+        String[] cardNames = new String[internalCardList.size()];
+        for (int i = 0; i < internalCardList.size(); i++) {
+            Card c = internalCardList.get(i);
+            cardNames[i] = c.getType().toString() + " (" + c.getVariant() + ")";
+        }
+        final String[] selection = new String[1];
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                selection[0] = (String) JOptionPane.showInputDialog(
+                        null,
+                        "FAVOR is played against you !\nYou need to give a card.\nSelect one from your hand:",
+                        "FAVOR - Give a card",
+                        JOptionPane.QUESTION_MESSAGE,
+                        null,
+                        cardNames,
+                        cardNames[0]
+                );
+            });
+        } catch (Exception e) { return null; }
+        return selection[0];
+    }
+
+    // --- MODIFICATION MAJEURE ICI : askTargetPlayer n'est plus appelé par AT ---
+    // (Cette méthode est maintenant utilisée en interne par WeKittensApp)
+    private int askTargetPlayerInternal() {
+        int opponents = currentTotalPlayers - 1;
+        ArrayList<String> options = new ArrayList<>();
+        ArrayList<Integer> values = new ArrayList<>();
+
+        if (opponents == 1) {
+            options.add("opponent (TOP)");
+            values.add(2);
+        } else {
+            if (opponents >= 1) { options.add("LEFT Player"); values.add(1); }
+            if (opponents >= 2) { options.add("TOP Player");   values.add(2); }
+            if (opponents >= 3) { options.add("Right Player"); values.add(3); }
+        }
+
+        // On peut appeler showOptionDialog directement car on est déjà sur l'EDT
+        // (cardPlayed est déclenché par un clic de souris)
+        int choice = JOptionPane.showOptionDialog(null,
+                "FAVORITE TARGET: Who do you want to plunder?",
+                "Victim choice",
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.QUESTION_MESSAGE,
+                null,
+                options.toArray(),
+                options.get(0));
+
+        if (choice >= 0 && choice < values.size()) {
+            return values.get(choice);
+        }
+        return -1;
+    }
+
     @Override
     public boolean cardPlayed(Card card) {
-        if (at.cardPlayed(card)) {
+        // --- MODIFICATION : GESTION PREALABLE DU FAVOR ---
+        int targetInfo = -1;
+
+        if (card.getType() == Card.CardType.favor) {
+            // On demande la cible AVANT d'appeler AmbientTalk pour éviter le deadlock
+            targetInfo = askTargetPlayerInternal();
+
+            // Si l'utilisateur annule la fenêtre, on annule le coup
+            if (targetInfo == -1) return false;
+        }
+
+        // On passe l'info à AmbientTalk (qui ne bloquera plus l'UI)
+        if (at.cardPlayed(card, targetInfo)) {
             drawingView.playCard(card);
             drawingView.repaint();
             return true;

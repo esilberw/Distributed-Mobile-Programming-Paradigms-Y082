@@ -294,6 +294,28 @@ object: {
                  if: (turnsToTake <= 0) then: { advanceTurn(); };
                  result := "DEFUSED";
             };
+            // >>> INSÉREZ LE BLOC ICI <<<
+                        // --- GIVE CARD (Pour Favor) ---
+                        if: (type == "GIVE_CARD") then: {
+                            def card := op.card;
+                            def targetId := op.toId; // Celui qui reçoit
+
+                            system.println("[GIVE] " + pid + " donne " + card.type + " à " + targetId);
+
+                            // 1. Retirer de la main du donneur (pid)
+                            removeCardFromHand(pid, card);
+
+                            // 2. Ajouter à la main du receveur (targetId)
+                            def targetHand := getHand(targetId);
+                            if: (targetHand != nil) then: {
+                                targetHand := targetHand + [card];
+                                hands.put(targetId, targetHand);
+                            };
+
+                            result := "GIVEN";
+                        };
+                        // >>> FIN DU BLOC <<<
+
 
             if: (type == "PLAYER_LEFT") then: {
                 killPlayer(pid);
@@ -310,21 +332,36 @@ object: {
         };
 
         def removeCardFromHand(pid, cardTemplate) {
-            def hand := getHand(pid);
-            def newHand := [];
-            def removed := false;
+                    def hand := getHand(pid);
+                    def newHand := [];
+                    def removed := false;
 
-            if: (hand != nil) then: {
-                hand.each: { |card|
-                    if: ((!removed).and: {card.type == cardTemplate.type}) then: {
-                        removed := true;
-                    } else: {
-                        newHand := newHand + [card];
+                    if: (hand != nil) then: {
+                        hand.each: { |card|
+                            // Par défaut, on garde la carte
+                            def keepCard := true;
+
+                            // Si on n'a pas encore retiré la carte cible...
+                            if: !removed then: {
+                                // ... et que le Type correspond
+                                if: (card.type == cardTemplate.type) then: {
+                                    // ... et que la Variante correspond
+                                    if: (card.variant == cardTemplate.variant) then: {
+                                        // ALORS c'est la carte à supprimer
+                                        removed := true;
+                                        keepCard := false;
+                                    };
+                                };
+                            };
+
+                            // Si on doit garder la carte, on l'ajoute à la nouvelle main
+                            if: keepCard then: {
+                                newHand := newHand + [card];
+                            };
+                        };
+                        hands.put(pid, newHand);
                     };
                 };
-                hands.put(pid, newHand);
-            };
-        };
 
         def passTurnNoDraw() {
             system.println("[PASS] Turn Pass (skip)");
