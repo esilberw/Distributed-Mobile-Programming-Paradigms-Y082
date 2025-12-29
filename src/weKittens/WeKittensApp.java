@@ -17,11 +17,10 @@ public class WeKittensApp implements HandAction {
     private boolean isDead = false;
     private boolean isVictory = false;
 
-    // AJOUT : Stockage du nombre de joueurs
+    // Stockage du nombre de joueurs
     private int currentTotalPlayers = 2;
 
     public WeKittensApp(ATLocalInterface at) {
-        // ... (CONSTRUCTEUR INCHANGÉ) ...
         this.at = at;
         JFrame frame = new JFrame("weKittens");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -88,7 +87,6 @@ public class WeKittensApp implements HandAction {
 
     public void initializeSession(int totalPlayers) {
         SwingUtilities.invokeLater(() -> {
-            // AJOUT : On mémorise le nombre de joueurs pour Favor
             this.currentTotalPlayers = totalPlayers;
 
             drawingView.setLeftPlayerCount(0);
@@ -102,7 +100,6 @@ public class WeKittensApp implements HandAction {
         });
     }
 
-    // ... (clearHand, addCardToHand, playCardOpponent, showExplosionAlert, showDeathMessage, markOpponentDead, showWinMessage, askInsertionIndex, askCardToGive INCHANGÉS) ...
     public void clearHand() {
         SwingUtilities.invokeLater(() -> {
             try {
@@ -117,10 +114,14 @@ public class WeKittensApp implements HandAction {
     public void addCardToHand(String typeName, String variant) {
         SwingUtilities.invokeLater(() -> {
             Card.CardType type = null;
+            // Nettoyage préventif
+            String cleanType = typeName.replace("\"", "");
+            String cleanVar = variant.replace("\"", "");
+
             for (Card.CardType ct : Card.CardType.values()) {
-                if (ct.name().equalsIgnoreCase(typeName)) { type = ct; break; }
+                if (ct.name().equalsIgnoreCase(cleanType)) { type = ct; break; }
             }
-            if (type == null && typeName.equalsIgnoreCase("exploding")) {
+            if (type == null && cleanType.equalsIgnoreCase("exploding")) {
                 for (Card.CardType ct : Card.CardType.values()) {
                     if (ct.name().toUpperCase().contains("EXPLODING")) { type = ct; break; }
                 }
@@ -128,7 +129,7 @@ public class WeKittensApp implements HandAction {
 
             if (type != null) {
                 try {
-                    Card card = new Card(type, variant);
+                    Card card = new Card(type, cleanVar);
                     handsView.addCard(card);
                     handsView.add(Box.createHorizontalStrut(5));
                     handsView.revalidate();
@@ -142,9 +143,12 @@ public class WeKittensApp implements HandAction {
 
     public void playCardOpponent(String typeName, String variant) {
         SwingUtilities.invokeLater(() -> {
+            String cleanType = typeName.replace("\"", "");
+            String cleanVar = variant.replace("\"", "");
+
             for (Card.CardType ct : Card.CardType.values()) {
-                if (ct.name().equalsIgnoreCase(typeName)) {
-                    drawingView.playCard(new Card(ct, variant));
+                if (ct.name().equalsIgnoreCase(cleanType)) {
+                    drawingView.playCard(new Card(ct, cleanVar));
                     drawingView.repaint();
                     return;
                 }
@@ -156,8 +160,10 @@ public class WeKittensApp implements HandAction {
         SwingUtilities.invokeLater(() -> {
             JDialog d = new JDialog((JFrame) SwingUtilities.getWindowAncestor(drawingView), "ATTENTION !", true);
             d.setLayout(new BorderLayout());
-            String variantDet = (variant != null && !variant.isEmpty()) ? variant : "a";
-            Card bomb = new Card(Card.CardType.exploding, variantDet);
+
+            String v = (variant != null && !variant.isEmpty()) ? variant.replace("\"", "") : "a";
+            Card bomb = new Card(Card.CardType.exploding, v);
+
             ImageIcon icon = new ImageIcon(bomb.getAWTImage().getScaledInstance(300, 420, Image.SCALE_SMOOTH));
             JLabel label = new JLabel(icon);
             label.setHorizontalAlignment(SwingConstants.CENTER);
@@ -168,6 +174,63 @@ public class WeKittensApp implements HandAction {
             d.add(text, BorderLayout.NORTH);
             d.add(label, BorderLayout.CENTER);
             d.setSize(400, 550);
+            d.setLocationRelativeTo(null);
+            d.setVisible(true);
+        });
+    }
+
+    // --- CORRECTION SEE THE FUTURE ---
+    public void showSeeTheFuture(ArrayList types, ArrayList variants) {
+        SwingUtilities.invokeLater(() -> {
+            JDialog d = new JDialog((JFrame) SwingUtilities.getWindowAncestor(drawingView), "SEE THE FUTURE (Top 3)", true);
+            d.setLayout(new GridLayout(1, 3, 10, 10));
+            d.getContentPane().setBackground(new Color(50, 50, 50));
+
+            for (int i = 0; i < types.size(); i++) {
+                Object tObj = types.get(i);
+                Object vObj = variants.get(i);
+
+                String tStr = (tObj != null) ? tObj.toString() : "cat";
+                String vStr = (vObj != null) ? vObj.toString() : "";
+
+                // NETTOYAGE DES GUILLEMETS (Vital pour ImageIO)
+                tStr = tStr.replace("\"", "");
+                vStr = vStr.replace("\"", "");
+
+                // Conversion sécurisée
+                Card.CardType typeEnum = Card.CardType.cat;
+                try {
+                    typeEnum = Card.CardType.valueOf(tStr);
+                } catch (Exception e) {
+                    for (Card.CardType ct : Card.CardType.values()) {
+                        if (ct.name().equalsIgnoreCase(tStr)) { typeEnum = ct; break; }
+                    }
+                }
+
+                try {
+                    Card c = new Card(typeEnum, vStr);
+                    // Image mise à l'échelle
+                    Image rawImg = c.getAWTImage();
+                    if (rawImg != null) {
+                        ImageIcon icon = new ImageIcon(rawImg.getScaledInstance(200, 280, Image.SCALE_SMOOTH));
+                        JLabel lbl = new JLabel(icon);
+
+                        lbl.setBorder(BorderFactory.createTitledBorder(
+                                BorderFactory.createLineBorder(Color.WHITE),
+                                "Card " + (i + 1),
+                                javax.swing.border.TitledBorder.CENTER,
+                                javax.swing.border.TitledBorder.TOP,
+                                new Font("Arial", Font.BOLD, 12),
+                                Color.WHITE
+                        ));
+                        d.add(lbl);
+                    }
+                } catch (Exception e) {
+                    System.err.println("Error showing Future card: " + e.getMessage());
+                }
+            }
+
+            d.setSize(700, 350);
             d.setLocationRelativeTo(null);
             d.setVisible(true);
         });
@@ -272,8 +335,6 @@ public class WeKittensApp implements HandAction {
         return selection[0];
     }
 
-    // --- MODIFICATION MAJEURE ICI : askTargetPlayer n'est plus appelé par AT ---
-    // (Cette méthode est maintenant utilisée en interne par WeKittensApp)
     private int askTargetPlayerInternal() {
         int opponents = currentTotalPlayers - 1;
         ArrayList<String> options = new ArrayList<>();
@@ -288,8 +349,6 @@ public class WeKittensApp implements HandAction {
             if (opponents >= 3) { options.add("Right Player"); values.add(3); }
         }
 
-        // On peut appeler showOptionDialog directement car on est déjà sur l'EDT
-        // (cardPlayed est déclenché par un clic de souris)
         int choice = JOptionPane.showOptionDialog(null,
                 "FAVORITE TARGET: Who do you want to plunder?",
                 "Victim choice",
@@ -307,18 +366,13 @@ public class WeKittensApp implements HandAction {
 
     @Override
     public boolean cardPlayed(Card card) {
-        // --- MODIFICATION : GESTION PREALABLE DU FAVOR ---
         int targetInfo = -1;
 
         if (card.getType() == Card.CardType.favor) {
-            // On demande la cible AVANT d'appeler AmbientTalk pour éviter le deadlock
             targetInfo = askTargetPlayerInternal();
-
-            // Si l'utilisateur annule la fenêtre, on annule le coup
             if (targetInfo == -1) return false;
         }
 
-        // On passe l'info à AmbientTalk (qui ne bloquera plus l'UI)
         if (at.cardPlayed(card, targetInfo)) {
             drawingView.playCard(card);
             drawingView.repaint();

@@ -408,47 +408,80 @@ def makeAmbientKittens() {
            };
        };
 
+       // --- 4. PLAY CARD ---
        if: (op.type == "PLAY_CARD") then: {
-                  if: !(op.fromId == myUserId) then: {
-                       gui.playCardOpponent(op.card.type, op.card.variant);
-                       // --- LOGIQUE FAVOR (Suis-je la cible ?) ---
-                       if: (op.card.type == "favor") then: {
-                           def target := op.targetPlayer;
-                           // Si target est nil ou si C'EST MOI
-                           if: ((target == nil).or: { target == myUserId }) then: {
-                               system.println("[FAVOR] Je suis ciblé par " + op.fromId);
 
-                               def choiceString := gui.askCardToGive();
+           // --- CAS A : C'est MOI qui joue ---
+           if: (op.fromId == myUserId) then: {
 
-                               if: (choiceString != nil) then: {
-                                   def myHand := gameModel.getHand(myUserId);
-                                   def cardToGive := nil;
+               // Vérification si c'est "SEE THE FUTURE"
+               def status := res;
+               def peekCards := [];
 
-                                   myHand.each: { |c|
-                                       def name := c.type + " (" + c.variant + ")";
-                                       if: ((cardToGive == nil).and: { name == choiceString }) then: {
-                                           cardToGive := c;
-                                       };
-                                   };
+               try: {
+                   if: (res.length == 2) then: {
+                       status := res[1];
+                       peekCards := res[2];
+                   };
+               } catch: { |e| status := res; };
 
-                                   if: (cardToGive != nil) then: {
-                                       def giveOp := isolate: {
-                                           def uuid := UUID.randomUUID().toString();
-                                           def type := "GIVE_CARD";
-                                           def fromId := myUserId;
-                                           def toId := op.fromId;
-                                           def card := cardToGive;
-                                           def sessionId := currentSessionId;
-                                       };
-                                       when: 1.seconds elapsed: { performTwoPhaseCommit(giveOp); };
-                                   };
+               if: (status == "PEEK_FUTURE") then: {
+                    system.println("[FUTURE] Affichage des 3 cartes...");
+
+                    // Conversion des données pour Java
+                    def typesList := jlobby.java.util.ArrayList.new();
+                    def varsList := jlobby.java.util.ArrayList.new();
+
+                    peekCards.each: { |c|
+                        typesList.add(c.type);
+                        varsList.add(c.variant);
+                    };
+
+                    gui.showSeeTheFuture(typesList, varsList);
+               };
+
+           } else: {
+               // --- CAS B : C'est l'ADVERSAIRE qui joue ---
+               gui.playCardOpponent(op.card.type, op.card.variant);
+
+               // --- LOGIQUE FAVOR (Suis-je la cible ?) ---
+               if: (op.card.type == "favor") then: {
+                   def target := op.targetPlayer;
+                   // Si target est nil ou si C'EST MOI
+                   if: ((target == nil).or: { target == myUserId }) then: {
+                       system.println("[FAVOR] Je suis ciblé par " + op.fromId);
+
+                       def choiceString := gui.askCardToGive();
+
+                       if: (choiceString != nil) then: {
+                           def myHand := gameModel.getHand(myUserId);
+                           def cardToGive := nil;
+
+                           myHand.each: { |c|
+                               def name := c.type + " (" + c.variant + ")";
+                               if: ((cardToGive == nil).and: { name == choiceString }) then: {
+                                   cardToGive := c;
                                };
-                           } else: {
-                               system.println("[FAVOR] Ouf, ce n'est pas pour moi. Cible: " + target);
+                           };
+
+                           if: (cardToGive != nil) then: {
+                               def giveOp := isolate: {
+                                   def uuid := UUID.randomUUID().toString();
+                                   def type := "GIVE_CARD";
+                                   def fromId := myUserId;
+                                   def toId := op.fromId;
+                                   def card := cardToGive;
+                                   def sessionId := currentSessionId;
+                               };
+                               when: 1.seconds elapsed: { performTwoPhaseCommit(giveOp); };
                            };
                        };
-                  };
-              };
+                   } else: {
+                       system.println("[FAVOR] Ouf, ce n'est pas pour moi. Cible: " + target);
+                   };
+               };
+           };
+       };
 
        // --- 5. GIVE CARD (Pour Favor) ---
        if: (op.type == "GIVE_CARD") then: {
