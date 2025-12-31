@@ -173,6 +173,40 @@ object: {
                                                        if: (count < 3) then: { isValid := false; };
                                                    };
                                                 };
+                               // --- AJOUT : VALIDATION 5 CARTES DIFFERENTES ---
+                                               if: (op.type == "PLAY_SPECIAL_5") then: {
+                                                   if: (isValid) then: {
+                                                       def h := getHand(pid);
+                                                       def uniqueKeys := [];
+
+                                                       // On compte les cartes uniques (Type + Variante pour les Chats)
+                                                       h.each: { |c|
+                                                           def key := c.type;
+                                                           // ASTUCE : Si c'est un chat, on ajoute la variante à la clé pour les différencier
+                                                           if: (c.type == "cat") then: { key := c.type + c.variant; };
+
+                                                           if: !(uniqueKeys.contains(key)) then: {
+                                                               uniqueKeys := uniqueKeys + [key];
+                                                           };
+                                                       };
+
+                                                       if: (uniqueKeys.length < 5) then: { isValid := false; };
+                                                   };
+                                               };
+
+                                                // --- AJOUT : VALIDATION RECUPERATION DEFAUSSE ---
+                                                if: (op.type == "TAKE_DISCARD") then: {
+                                                    if: (isValid) then: {
+                                                        // On vérifie que la carte demandée est bien dans la défausse
+                                                        def found := false;
+                                                        discardPile.each: { |c|
+                                                            if: ((c.type == op.card.type).and: {c.variant == op.card.variant}) then: {
+                                                                found := true;
+                                                            };
+                                                        };
+                                                        if: !found then: { isValid := false; };
+                                                    };
+                                                };
                             };
                             isValid;
                         };
@@ -269,6 +303,68 @@ object: {
                         discardPile := discardPile + [card, card, card];
                         result := "TRIPLE_OK";
                     };
+// --- 4. PLAY SPECIAL 5 (5 Différentes) ---
+            if: (type == "PLAY_SPECIAL_5") then: {
+                system.println("[JEU] " + pid + " joue COMBO 5 SPECIAL");
+
+                def hand := getHand(pid);
+                def uniqueKeysFound := [];
+                def cardsToRemove := [];
+
+                // 1. Sélectionner les 5 cartes (en distinguant les Chats)
+                hand.each: { |c|
+                    if: (uniqueKeysFound.length < 5) then: {
+                        def key := c.type;
+                        if: (c.type == "cat") then: { key := c.type + c.variant; };
+
+                        if: !(uniqueKeysFound.contains(key)) then: {
+                            uniqueKeysFound := uniqueKeysFound + [key];
+                            cardsToRemove := cardsToRemove + [c];
+                        };
+                    };
+                };
+
+                // 2. Les retirer et mettre à jour la défausse
+                cardsToRemove.each: { |c|
+                    removeCardFromHand(pid, c);
+                    // On ajoute bien la carte à la pile
+                    discardPile := discardPile + [c];
+                };
+
+                system.println("[COMBO 5] " + cardsToRemove.length + " cartes ajoutées à la défausse.");
+
+                // 3. RENVOYER LE CONTENU DE LA DEFAUSSE (Mis à jour)
+                result := ["COMBO_5_OK", discardPile];
+            };
+                                // --- 5. TAKE DISCARD (Récupération) ---
+                                if: (type == "TAKE_DISCARD") then: {
+                                    def targetCard := op.card;
+                                    system.println("[JEU] " + pid + " récupère " + targetCard.type + " de la défausse");
+
+                                    // 1. Retirer de la défausse (Une seule instance)
+                                    def newDiscard := [];
+                                    def found := false;
+                                    discardPile.each: { |c|
+                                        if: !found then: {
+                                            if: ((c.type == targetCard.type).and: {c.variant == targetCard.variant}) then: {
+                                                found := true; // On saute celle-ci (retrait)
+                                            } else: {
+                                                newDiscard := newDiscard + [c];
+                                            };
+                                        } else: {
+                                            newDiscard := newDiscard + [c];
+                                        };
+                                    };
+                                    discardPile := newDiscard;
+
+                                    // 2. Ajouter à la main
+                                    def h := getHand(pid);
+                                    if: (h != nil) then: {
+                                        hands.put(pid, h + [targetCard]);
+                                    };
+
+                                    result := "RECOVERED";
+                                };
 
                     // --- 4. DRAW CARD ---
                     if: (type == "DRAW_CARD") then: {
@@ -389,7 +485,7 @@ object: {
                           // ... (votre code LEFT existant) ...
                            killPlayer(pid);
                         def hand := getHand(pid);
-                        if: !(hand == nil) then: { discardPile := discardPile + hand; hands.remove(pid); };
+
                         if: (activePlayers.length == 1) then: {
                             result := "WINNER";
                         } else: {
@@ -444,26 +540,45 @@ object: {
             system.println("[TURN] Player " + getCurrentPlayer() + " (actions: " + turnsToTake + ")");
         };
 
-        def killPlayer(pid) {
-            def idxToRemove := -1;
-            def i := 0;
-            activePlayers.each: { |p| if: (p == pid) then: { idxToRemove := i; }; i := i + 1; };
+        // Ajoutez ceci dans la section ACCESSEURS (vers la ligne 737)
+                def getDiscardTop() {
+                    def c := nil;
+                    if: !(discardPile.isEmpty()) then: {
+                        c := discardPile[discardPile.length];
+                    };
+                    c;
+                };
 
-            if: (idxToRemove > -1) then: {
-                def newActive := [];
-                activePlayers.each: { |p| if: (p != pid) then: { newActive := newActive + [p]; }; };
-                activePlayers := newActive;
+        // Remplacez la fonction killPlayer par celle-ci (vers la ligne 833)
+                def killPlayer(pid) {
+                    def idxToRemove := -1;
+                    def i := 0;
+                    activePlayers.each: { |p| if: (p == pid) then: { idxToRemove := i; }; i := i + 1; };
 
-                deadPlayers := deadPlayers + [pid];
+                    if: (idxToRemove > -1) then: {
+                        // 1. Transfert de la main vers la défausse
+                        def hand := hands.get(pid);
+                        if: (hand != nil) then: {
+                            system.println("[RULES] Transfert main de " + pid + " vers défausse (" + hand.length + " cartes).");
+                            discardPile := discardPile + hand;
+                            hands.remove(pid);
+                        };
 
-                if: (idxToRemove < currentPlayerIndex) then: { currentPlayerIndex := currentPlayerIndex - 1; };
-                if: (currentPlayerIndex >= activePlayers.length) then: { currentPlayerIndex := 0; };
+                        // 2. Exclusion du joueur
+                        def newActive := [];
+                        activePlayers.each: { |p| if: (p != pid) then: { newActive := newActive + [p]; }; };
+                        activePlayers := newActive;
+                        deadPlayers := deadPlayers + [pid];
 
-                turnsToTake := 1;
-                nextTurnCount := 1;
-                system.println("[DEAD] Player " + pid + " is DEAD.");
-            };
-        };
+                        // 3. Ajustement du tour
+                        if: (idxToRemove < currentPlayerIndex) then: { currentPlayerIndex := currentPlayerIndex - 1; };
+                        if: (currentPlayerIndex >= activePlayers.length) then: { currentPlayerIndex := 0; };
+
+                        turnsToTake := 1;
+                        nextTurnCount := 1;
+                        system.println("[DEAD] Player " + pid + " is DEAD.");
+                    };
+                };
     };
   };
 };

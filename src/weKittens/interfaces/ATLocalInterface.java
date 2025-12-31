@@ -17,6 +17,12 @@ public interface ATLocalInterface {
     // reqVariant : La variante demandée (ex: "catnip")
     boolean triplePlayed(Card card, int targetInfo, String reqType, String reqVariant);
 
+    // NOUVEAU : Jouer le combo 5 cartes différentes
+    boolean special5ComboPlayed();
+
+    // NOUVEAU : Récupérer une carte de la défausse (suite au combo)
+    boolean pickFromDiscard(String type, String variant);
+
     boolean playerDrewCard();
 
     void updateTurnStatus(String message, boolean isMyTurn);
