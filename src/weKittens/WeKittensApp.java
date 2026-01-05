@@ -6,23 +6,25 @@ import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.ArrayList;
-import java.util.HashSet;
 import javax.swing.*;
-import javax.swing.border.Border;
 
 public class WeKittensApp implements HandAction {
     private final ATLocalInterface at;
-    private final DrawingView drawingView;
+
+    // MODIFICATION 1 : frame et drawingView ne sont plus 'final' pour pouvoir être réinitialisés
+    private JFrame frame;
+    private DrawingView drawingView;
+
     private final HandView handsView;
     private final JLabel statusLabel;
 
     // Liste réelle de la main
     private final ArrayList<Card> internalCardList;
 
-    // NOUVEAU : Liste des cartes actuellement sélectionnées (cliquées)
+    // Liste des cartes actuellement sélectionnées
     private final ArrayList<Card> selectedCards = new ArrayList<>();
 
-    // AJOUT : Stockage des index relatifs des morts
+    // Stockage des index relatifs des morts
     private final java.util.HashSet<Integer> deadOpponents = new java.util.HashSet<>();
 
     private boolean isDead = false;
@@ -31,7 +33,9 @@ public class WeKittensApp implements HandAction {
 
     public WeKittensApp(ATLocalInterface at) {
         this.at = at;
-        JFrame frame = new JFrame("weKittens");
+
+        // MODIFICATION 2 : On utilise le champ de classe 'frame' (pas de 'JFrame frame = ...')
+        frame = new JFrame("weKittens");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 
         frame.setLayout(new BorderLayout());
@@ -39,21 +43,43 @@ public class WeKittensApp implements HandAction {
         frame.setResizable(false);
 
         // 1. HEADER
-        JPanel statusPanel = new JPanel();
+        JPanel statusPanel = new JPanel(new BorderLayout());
         statusPanel.setBackground(Color.DARK_GRAY);
         statusPanel.setPreferredSize(new Dimension(480, 40));
-        statusLabel = new JLabel("Connexion...");
+        statusPanel.setBorder(BorderFactory.createEmptyBorder(0, 10, 0, 10));
+
+        statusLabel = new JLabel("Connexion...", SwingConstants.CENTER);
         statusLabel.setForeground(Color.WHITE);
         statusLabel.setFont(new Font("Arial", Font.BOLD, 16));
-        statusPanel.add(statusLabel);
+
+        // Le bouton Quitter (Rouge)
+        JButton btnLeave = new JButton("X");
+        btnLeave.setBackground(Color.RED);
+        btnLeave.setForeground(Color.WHITE);
+        btnLeave.setFocusPainted(false);
+        btnLeave.setFont(new Font("Arial", Font.BOLD, 12));
+        btnLeave.setPreferredSize(new Dimension(45, 30));
+        btnLeave.addActionListener(e -> {
+            int choice = JOptionPane.showConfirmDialog(frame, "Leave session?", "Quit", JOptionPane.YES_NO_OPTION);
+            if (choice == JOptionPane.YES_OPTION) {
+                if (at != null) {
+                    if (isDead) at.leaveSpectatingMode();
+                    else at.leaveSession();
+                }
+            }
+        });
+
+        statusPanel.add(statusLabel, BorderLayout.CENTER);
+        statusPanel.add(btnLeave, BorderLayout.EAST);
+
         frame.add(statusPanel, BorderLayout.NORTH);
 
-        // 2. CENTER
+        // 2. CENTER (Table de jeu)
         drawingView = new DrawingView();
         drawingView.setBackground(new Color(60, 60, 60));
         frame.add(drawingView, BorderLayout.CENTER);
 
-        // 3. FOOTER
+        // 3. FOOTER (Boutons + Main du joueur)
         JPanel bottomPanel = new JPanel();
         bottomPanel.setLayout(new BorderLayout());
 
@@ -64,32 +90,33 @@ public class WeKittensApp implements HandAction {
         JButton btnDraw = new JButton("Draw Card (End Turn)");
         btnDraw.addActionListener(e -> {
             if (at != null) {
-                // On vide la sélection avant de piocher
                 clearSelection();
-                if (!at.playerDrewCard()) JOptionPane.showMessageDialog(frame, "Not your turn, please wait !");
+                if (!at.playerDrewCard()) JOptionPane.showMessageDialog(frame, "Not your turn (or action blocked)!");
             }
         });
 
-        // NOUVEAU : BOUTON JOUER LA SELECTION (Pour Single, Pair, Triple)
+        // BOUTON JOUER LA SELECTION
         JButton btnPlay = new JButton("PLAY SELECTED");
         btnPlay.setBackground(new Color(46, 204, 113)); // Vert
         btnPlay.setForeground(Color.WHITE);
         btnPlay.addActionListener(e -> executePlaySelected());
 
-        actionPanel.add(btnPlay); // On ajoute le bouton jouer
+        actionPanel.add(btnPlay);
         actionPanel.add(btnDraw);
         bottomPanel.add(actionPanel, BorderLayout.NORTH);
 
         internalCardList = new ArrayList<>();
 
-        // Note: On passe 'this' mais la méthode cardPlayed ne sera plus appelée directement par le clic
         handsView = new HandView(internalCardList, this);
         handsView.setLayout(new BoxLayout(handsView, BoxLayout.X_AXIS));
         handsView.setBackground(new Color(100, 100, 100));
+        handsView.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
         JScrollPane scrollPane = new JScrollPane(handsView, JScrollPane.VERTICAL_SCROLLBAR_NEVER, JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
         scrollPane.setPreferredSize(new Dimension(480, 180));
         scrollPane.setBorder(null);
+        scrollPane.getHorizontalScrollBar().setUnitIncrement(16);
+
         bottomPanel.add(scrollPane, BorderLayout.CENTER);
 
         frame.add(bottomPanel, BorderLayout.SOUTH);
@@ -97,32 +124,57 @@ public class WeKittensApp implements HandAction {
         initializeSession(1);
     }
 
+    public void resetToLobby() {
+        SwingUtilities.invokeLater(() -> {
+            // 1. Remettre le texte du haut
+            statusLabel.setText("Connexion...");
+            statusLabel.setForeground(Color.WHITE);
+
+            // 2. REMPLACEMENT RADICAL DU TAPIS DE JEU
+            // On retire l'ancienne vue (qui contient la défausse)
+            frame.remove(drawingView);
+
+            // On en crée une toute neuve (vide)
+            drawingView = new DrawingView();
+            drawingView.setBackground(new Color(60, 60, 60));
+            frame.add(drawingView, BorderLayout.CENTER);
+
+            // 3. Vider la main et la sélection
+            clearHand();
+            selectedCards.clear();
+
+            // 4. Réinitialiser les états internes
+            isDead = false;
+            isVictory = false;
+            deadOpponents.clear();
+
+            // 5. IMPORTANT : On remet le compteur d'adversaires à ZERO
+            // Cela efface les 3 joueurs que vous voyiez sur l'image
+            initializeSession(1);
+
+            // 5. Force le rafraîchissement global de la fenêtre
+            frame.revalidate();
+            frame.repaint();
+        });
+    }
+
     // --- LOGIQUE DE SELECTION ---
 
-    // Appelée quand on clique sur une carte dans la main
     private void toggleSelection(Card card, JComponent cardComponent) {
         if (selectedCards.contains(card)) {
-            // Désélectionner
             selectedCards.remove(card);
-            cardComponent.setBorder(null); // Enlever bordure
+            cardComponent.setBorder(null);
         } else {
-            // Sélectionner
             selectedCards.add(card);
-            // Bordure Verte épaisse pour montrer la sélection
             cardComponent.setBorder(BorderFactory.createLineBorder(Color.GREEN, 4));
         }
-
-        // VERIFICATION AUTOMATIQUE DU COMBO 5
         checkAuto5Combo();
     }
 
     private void clearSelection() {
         selectedCards.clear();
-        // On rafraichit l'affichage pour enlever les bordures
         handsView.revalidate();
         handsView.repaint();
-        // Hack: On force le repaint des bordures en rechargeant la main visuelle
-        // (Ou on pourrait stocker les références des composants, mais ceci est plus simple)
         SwingUtilities.invokeLater(() -> {
             for(Component c : handsView.getComponents()) {
                 if(c instanceof JComponent) ((JComponent)c).setBorder(null);
@@ -132,31 +184,19 @@ public class WeKittensApp implements HandAction {
 
     // --- LOGIQUE DE JEU ---
 
-    // --- NOUVELLE METHODE UTILITAIRE ---
-    // Compte les cartes uniques en distinguant les variantes de Chats
     private int countUniqueCards(ArrayList<Card> cards) {
         java.util.HashSet<String> uniqueKeys = new java.util.HashSet<>();
-
         for (Card c : cards) {
-            // Pour les cartes "CHATS" (sans pouvoir), le nom (variante) compte comme différence.
-            // Ex: "Beard Cat" est différent de "Rainbow Cat".
             if (c.getType() == Card.CardType.cat) {
                 uniqueKeys.add(c.getType().name() + "_" + c.getVariant());
-            }
-            // Pour les cartes ACTION (Attack, Skip...), seule la fonction compte.
-            // Ex: "Attack (Mine)" est pareil que "Attack (Space)".
-            else {
+            } else {
                 uniqueKeys.add(c.getType().name());
             }
         }
         return uniqueKeys.size();
     }
 
-    // --- MISE A JOUR : LOGIQUE DE SELECTION ---
-
-    // 1. Détection automatique
     private void checkAuto5Combo() {
-        // Utilisation de la nouvelle logique de comptage
         if (countUniqueCards(selectedCards) >= 5) {
             int choice = JOptionPane.showConfirmDialog(null,
                     "COMBO 5 DETECTED (5 Different Cards)!\nDo you want to play the SPECIAL 5 COMBO?",
@@ -170,7 +210,6 @@ public class WeKittensApp implements HandAction {
         }
     }
 
-    // 2. Exécution manuelle via le bouton "PLAY SELECTED"
     private void executePlaySelected() {
         int count = selectedCards.size();
         if (count == 0) {
@@ -178,7 +217,6 @@ public class WeKittensApp implements HandAction {
             return;
         }
 
-        // Vérification que toutes les cartes sont identiques (pour Pair/Triple)
         boolean allSame = true;
         Card first = selectedCards.get(0);
         for (Card c : selectedCards) {
@@ -188,8 +226,6 @@ public class WeKittensApp implements HandAction {
             }
         }
 
-        // --- AJOUT : SPECIAL 5 COMBO (MANUEL) ---
-        // On vérifie si on a 5 cartes sélectionnées et si elles sont uniques
         if (count >= 5) {
             if (countUniqueCards(selectedCards) >= 5) {
                 if (at.special5ComboPlayed()) {
@@ -197,14 +233,11 @@ public class WeKittensApp implements HandAction {
                     return;
                 }
             } else {
-                JOptionPane.showMessageDialog(null,
-                        "Invalid 5-Card Combo.\nYou need 5 DIFFERENT cards (different titles).",
-                        "Invalid Combo", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(null, "Invalid 5-Card Combo.\nYou need 5 DIFFERENT cards.", "Invalid Combo", JOptionPane.ERROR_MESSAGE);
                 return;
             }
         }
 
-        // --- TRIPLE ---
         if (count == 3 && allSame) {
             int choice = JOptionPane.showConfirmDialog(null, "Play TRIPLE to request a card?", "Confirm", JOptionPane.YES_NO_OPTION);
             if (choice == JOptionPane.YES_OPTION) {
@@ -226,7 +259,6 @@ public class WeKittensApp implements HandAction {
             return;
         }
 
-        // --- PAIRE ---
         if (count == 2 && allSame) {
             int choice = JOptionPane.showConfirmDialog(null, "Play PAIR to steal a random card?", "Confirm", JOptionPane.YES_NO_OPTION);
             if (choice == JOptionPane.YES_OPTION) {
@@ -244,8 +276,18 @@ public class WeKittensApp implements HandAction {
             return;
         }
 
-        // --- SINGLE ---
         if (count == 1) {
+            if (first.getType() == Card.CardType.nope) {
+                if (at.nopePlayed(first)) {
+                    drawingView.playCard(first);
+                    drawingView.repaint();
+                    removeSelectedCardsFromHand();
+                } else {
+                    JOptionPane.showMessageDialog(null, "Cannot play Nope (Are you dead?)", "Error", JOptionPane.ERROR_MESSAGE);
+                }
+                return;
+            }
+
             if (first.getType() == Card.CardType.cat) {
                 JOptionPane.showMessageDialog(null, "Cat cards cannot be played alone!", "Error", JOptionPane.WARNING_MESSAGE);
                 return;
@@ -265,43 +307,14 @@ public class WeKittensApp implements HandAction {
             return;
         }
 
-        JOptionPane.showMessageDialog(null, "Invalid selection for a move.\nPairs/Triples must be identical.\n5 Combo must be different.", "Invalid Move", JOptionPane.ERROR_MESSAGE);
+        JOptionPane.showMessageDialog(null, "Invalid selection.", "Invalid Move", JOptionPane.ERROR_MESSAGE);
     }
 
-    // Helper pour retirer les cartes jouées de la main graphique
     private void removeSelectedCardsFromHand() {
-        // 1. On nettoie uniquement la sélection visuelle (bordures vertes)
-        // 2. ON NE TOUCHE PLUS A LA LISTE DES CARTES ICI !
-        // C'est le secret pour éviter les conflits.
-        // Explication :
-        // Quand le coup est validé par le 2PC, main.at appelle 'updateJavaHand'.
-        // C'est cette méthode qui va vider la main et la redessiner proprement
-        // avec les données officielles du serveur.
-        // On évite ainsi que deux processus modifient la liste en même temps.
         SwingUtilities.invokeLater(this::clearSelection);
     }
 
-    // Méthode helper pour ajouter une carte et son listener
-    private void addCardToUI(Card card) {
-        // On crée un composant custom ou on utilise addCard de HandView s'il expose le composant
-        // Ici on suppose que HandView.addCard ajoute un JLabel/JPanel
-
-        // Pour pouvoir attacher le listener, on doit tricher un peu si HandView masque l'ajout
-        // SOLUTION : On modifie HandView ou on utilise l'implémentation existante :
-
-        handsView.addCard(card);
-        // On récupère le dernier composant ajouté pour lui mettre le listener
-        int count = handsView.getComponentCount();
-        if (count > 0) {
-            // Le dernier est un strut (Box.createHorizontalStrut(5)), l'avant dernier est la carte
-            // Vérifions la structure de addCardToHand plus bas
-            Component comp = handsView.getComponent(count - 1); // C'est la carte (si pas de strut après)
-            // Dans addCardToHand original, on mettait un strut APRES.
-            // Donc ici on va faire pareil.
-        }
-    }
-
-    // --- PARTIE UI CLASSIQUE ---
+    // --- UI HELPERS ---
 
     public void setTurnStatus(String message, boolean isMyTurn) {
         SwingUtilities.invokeLater(() -> {
@@ -339,9 +352,6 @@ public class WeKittensApp implements HandAction {
         });
     }
 
-
-
-    // VERSION MODIFIEE AVEC LISTENER DE SELECTION
     public void addCardToHand(String typeName, String variant) {
         SwingUtilities.invokeLater(() -> {
             Card.CardType type = null;
@@ -360,13 +370,17 @@ public class WeKittensApp implements HandAction {
             if (type != null) {
                 try {
                     Card card = new Card(type, cleanVar);
-                    internalCardList.add(card); // Ajout liste logique
+                    internalCardList.add(card);
 
-                    // Création composant graphique (JLabel via Card.getAWTImage)
                     ImageIcon icon = new ImageIcon(card.getAWTImage().getScaledInstance(100, 140, Image.SCALE_SMOOTH));
                     JLabel cardLabel = new JLabel(icon);
 
-                    // --- LISTENER DE SELECTION ---
+                    Dimension dim = new Dimension(100, 140);
+                    cardLabel.setPreferredSize(dim);
+                    cardLabel.setMaximumSize(dim);
+                    cardLabel.setMinimumSize(dim);
+                    cardLabel.setAlignmentY(Component.CENTER_ALIGNMENT);
+
                     cardLabel.addMouseListener(new MouseAdapter() {
                         @Override
                         public void mouseClicked(MouseEvent e) {
@@ -376,6 +390,7 @@ public class WeKittensApp implements HandAction {
 
                     handsView.add(cardLabel);
                     handsView.add(Box.createHorizontalStrut(5));
+
                     handsView.revalidate();
                     handsView.repaint();
                 } catch (Exception e) {
@@ -399,11 +414,11 @@ public class WeKittensApp implements HandAction {
         });
     }
 
-    // --- POPUPS & DIALOGUES ---
+    // --- POPUPS & MESSAGES ---
 
     public void showExplosionAlert(String variant) {
         SwingUtilities.invokeLater(() -> {
-            JDialog d = new JDialog((JFrame) SwingUtilities.getWindowAncestor(drawingView), "ATTENTION !", true);
+            JDialog d = new JDialog(frame, "ATTENTION !", true);
             d.setLayout(new BorderLayout());
             String v = (variant != null && !variant.isEmpty()) ? variant.replace("\"", "") : "a";
             Card bomb = new Card(Card.CardType.exploding, v);
@@ -424,7 +439,7 @@ public class WeKittensApp implements HandAction {
 
     public void showSeeTheFuture(ArrayList types, ArrayList variants) {
         SwingUtilities.invokeLater(() -> {
-            JDialog d = new JDialog((JFrame) SwingUtilities.getWindowAncestor(drawingView), "SEE THE FUTURE (Top 3)", true);
+            JDialog d = new JDialog(frame, "SEE THE FUTURE (Top 3)", true);
             d.setLayout(new GridLayout(1, 3, 10, 10));
             d.getContentPane().setBackground(new Color(50, 50, 50));
 
@@ -531,20 +546,17 @@ public class WeKittensApp implements HandAction {
         return selection[0];
     }
 
-    // Mettre à jour la méthode de choix
     private int askTargetPlayerInternal() {
         int opponents = currentTotalPlayers - 1;
         ArrayList<String> options = new ArrayList<>();
         ArrayList<Integer> values = new ArrayList<>();
 
         if (opponents == 1) {
-            // En 1v1, si l'adversaire est mort, la partie est finie, mais on protège quand même
             if (!deadOpponents.contains(2)) {
                 options.add("opponent (TOP)");
                 values.add(2);
             }
         } else {
-            // En multijoueur, on vérifie chaque position
             if (opponents >= 1 && !deadOpponents.contains(1)) { options.add("LEFT Player"); values.add(1); }
             if (opponents >= 2 && !deadOpponents.contains(2)) { options.add("TOP Player");   values.add(2); }
             if (opponents >= 3 && !deadOpponents.contains(3)) { options.add("Right Player"); values.add(3); }
@@ -630,13 +642,8 @@ public class WeKittensApp implements HandAction {
         return result;
     }
 
-    // Cette méthode de l'interface HandAction n'est plus utilisée directement par le clic,
-    // mais on doit la garder pour respecter le contrat d'interface si HandView l'appelle.
-    // Dans notre nouvelle logique, on ignore son contenu ou on le redirige.
     @Override
     public boolean cardPlayed(Card card) {
-        // Redirection vers la logique de sélection si jamais HandView appelle ça
-        // Mais comme on a ajouté un MouseListener spécifique sur le JLabel, c'est lui qui prend la main.
         return false;
     }
 }

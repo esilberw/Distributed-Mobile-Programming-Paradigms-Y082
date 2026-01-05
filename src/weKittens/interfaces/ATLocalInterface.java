@@ -23,7 +23,14 @@ public interface ATLocalInterface {
     // NOUVEAU : Récupérer une carte de la défausse (suite au combo)
     boolean pickFromDiscard(String type, String variant);
 
-    boolean playerDrewCard();
+    // NOUVEAU : Jouer un NOPE (Interruption)
+    boolean nopePlayed(Card card);
 
-    void updateTurnStatus(String message, boolean isMyTurn);
+    // [RENOMME] Quitter le mode spectateur (Retour Lobby sans impact jeu)
+    void leaveSpectatingMode();
+
+    // [RENOMME] Quitter la session active (Abandonner la partie)
+    void leaveSession();
+
+    boolean playerDrewCard();
 }

@@ -1,0 +1,217 @@
+/**
+ * tests.at
+ * Tests unitaires pour la logique distribuée de WeKittens.
+ */
+
+import /.at.lang.futures;
+import /.at.lang.multifutures;
+import /.at.support.timer exclude seconds, minutes, millisec;
+import /.at.unit.test;
+
+deftype Player;
+def UUID := jlobby.java.util.UUID;
+
+// --- DEFINITION D'UN JOUEUR SIMULÉ (MOCK) ---
+def createMockPlayer(name) {
+    actor: {
+        // Imports sécurisés pour éviter les conflits de noms
+        import /.at.lang.futures exclude seconds, minutes, millisec;
+        import /.at.support.timer;
+        import /.at.collections.java.hashmap;
+
+        def LOBBY := 0;
+        def PLAYING := 1;
+
+        def myName := name;
+        def myUserId := jlobby.java.util.UUID.randomUUID().toString();
+        def myState := LOBBY;
+        def currentSessionId := nil;
+        def sessionPlayerIds := [];
+
+        // Variable de publication pour pouvoir l'annuler proprement
+        def pub := nil;
+
+        def playersById := HashMap.new();
+        def playerStates := HashMap.new();
+
+        // --- INTERFACE RESEAU (Privée, celle exportée sur le réseau) ---
+        def remoteInterface := object: {
+            def getUserId() { myUserId; };
+
+            def updatePlayerState(id, state) {
+                playerStates.put(id, state);
+            };
+
+            def inviteToSession(sessionId, initiatorId, config, pList) {
+                if: (myState == LOBBY) then: {
+                    myState := PLAYING;
+                    currentSessionId := sessionId;
+                    sessionPlayerIds := pList;
+                    broadcastMyState(PLAYING);
+                };
+            };
+
+            def fetchOpsSince(uuid) { [] };
+            def prepare(op) { true };
+            def commit(op) { true };
+        };
+
+        def broadcastMyState(newState) {
+            // FIX: On itère directement sur les valeurs, pas de .toArray() nécessaire
+            playersById.values().each: { |p|
+                p<-updatePlayerState(myUserId, newState);
+            };
+        };
+
+        // --- INTERFACE DE TEST (Publique, celle retournée par l'acteur) ---
+        object: {
+            def goOnline() {
+                // On stocke la publication pour pouvoir l'annuler
+                pub := export: remoteInterface as: Player;
+
+                whenever: Player discovered: { |p|
+                    when: p<-getUserId()@FutureMessage becomes: { |id|
+                        if: (id != myUserId) then: {
+                            playersById.put(id, p);
+                            p<-updatePlayerState(myUserId, myState);
+                        };
+                    };
+                };
+            };
+
+            def goOffline() {
+                // FIX: Vrai nettoyage du service
+                if: (pub != nil) then: {
+                    pub.cancel();
+                    pub := nil;
+                };
+            };
+
+            def startSessionWith(opponents) {
+                def newSessionId := jlobby.java.util.UUID.randomUUID().toString();
+                def dummyConfig := object: { def syncedDeck := []; def syncedHandsData := []; };
+                def allIds := [myUserId];
+
+                opponents.each: { |opp|
+                    // On invite l'interface de test de l'autre mock
+                    opp<-inviteToSession(newSessionId, myUserId, dummyConfig, allIds);
+                };
+
+                myState := PLAYING;
+                currentSessionId := newSessionId;
+                broadcastMyState(PLAYING);
+                newSessionId;
+            };
+
+            // Helper pour permettre aux mocks de s'inviter entre eux via leurs interfaces de test
+            def inviteToSession(sid, initId, conf, plist) {
+                remoteInterface.inviteToSession(sid, initId, conf, plist);
+            };
+
+            def getSessionId() { currentSessionId; };
+            def getState() { myState; };
+            def getKnownPlayersCount() { playersById.size(); };
+            def getMyId() { myUserId; };
+        };
+    };
+};
+
+// --- SUITE DE TESTS ---
+
+def DistributedTest := extend: /.at.unit.test.UnitTest.new("WeKittens Distributed Tests") with: {
+
+    def actors := [];
+
+    def tearDown() {
+        actors.each: { |a| a<-goOffline() };
+        actors := [];
+    };
+
+    def testSessionCreation() {
+        def [fut, res] := makeFuture();
+
+        def p1 := createMockPlayer("Alice");
+        def p2 := createMockPlayer("Bob");
+        actors := [p1, p2];
+
+        p1<-goOnline();
+        p2<-goOnline();
+
+        when: 2.seconds elapsed: {
+            when: p1<-startSessionWith([p2])@FutureMessage becomes: { |sid|
+                when: 1.seconds elapsed: {
+                    def f1 := p1<-getSessionId()@FutureMessage;
+                    def f2 := p2<-getSessionId()@FutureMessage;
+
+                    when: (group: [f1, f2]) becomes: { |results|
+                        def id1 := results[1];
+                        def id2 := results[2];
+
+                        self.assertFalse(id1 == nil, "Alice Session ID should not be nil");
+                        self.assertEquals(id1, id2, "Alice and Bob should have SAME Session ID");
+                        res.resolve(true);
+                    };
+                };
+            };
+        };
+        fut;
+    };
+
+    def testMultipleSessions() {
+        def [fut, res] := makeFuture();
+
+        def p1 := createMockPlayer("S1_Alice");
+        def p2 := createMockPlayer("S1_Bob");
+        def p3 := createMockPlayer("S2_Charlie");
+        def p4 := createMockPlayer("S2_David");
+        actors := [p1, p2, p3, p4];
+
+        p1<-goOnline(); p2<-goOnline(); p3<-goOnline(); p4<-goOnline();
+
+        when: 3.seconds elapsed: {
+            def fS1 := p1<-startSessionWith([p2])@FutureMessage;
+            def fS2 := p3<-startSessionWith([p4])@FutureMessage;
+
+            when: (group: [fS1, fS2]) becomes: { |sids|
+                when: 1.seconds elapsed: {
+                    def fId2 := p2<-getSessionId()@FutureMessage;
+                    def fId4 := p4<-getSessionId()@FutureMessage;
+
+                    when: (group: [fId2, fId4]) becomes: { |guestIds|
+                        def session1_Host := sids[1];
+                        def session2_Host := sids[2];
+                        def session1_Guest := guestIds[1];
+                        def session2_Guest := guestIds[2];
+
+                        self.assertEquals(session1_Host, session1_Guest, "S1 Integrity check");
+                        self.assertEquals(session2_Host, session2_Guest, "S2 Integrity check");
+                        self.assertFalse(session1_Host == session2_Host, "Sessions MUST be unique");
+
+                        res.resolve(true);
+                    };
+                };
+            };
+        };
+        fut;
+    };
+
+    def testDiscoveryCount() {
+         def [fut, res] := makeFuture();
+         def p1 := createMockPlayer("Host");
+         def p2 := createMockPlayer("Guest1");
+         def p3 := createMockPlayer("Guest2");
+         actors := [p1, p2, p3];
+
+         p1<-goOnline(); p2<-goOnline(); p3<-goOnline();
+
+         when: 3.seconds elapsed: {
+             when: p1<-getKnownPlayersCount()@FutureMessage becomes: { |count|
+                 self.assertTrue(count >= 2, "Discovery check: Host should see at least 2 peers. Found: " + count);
+                 res.resolve(true);
+             };
+         };
+         fut;
+    };
+};
+
+DistributedTest.runTest();

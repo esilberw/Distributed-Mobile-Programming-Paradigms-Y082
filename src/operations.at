@@ -1,0 +1,128 @@
+/**
+ * operations.at
+ * Factory pour créer les opérations de jeu (isolates).
+ */
+
+def UUID := jlobby.java.util.UUID;
+
+object: {
+
+  // 1. Quitter / Kick
+  def makePlayerLeftOp(_fromId, _sessionId) {
+      isolate: {
+          def uuid := UUID.randomUUID().toString();
+          def type := "PLAYER_LEFT";
+          def fromId := _fromId;       // Correction ici
+          def sessionId := _sessionId; // Correction ici
+      };
+  };
+
+  // 2. Pioche
+  def makeDrawCardOp(_fromId, _sessionId) {
+      isolate: {
+          def uuid := UUID.randomUUID().toString();
+          def type := "DRAW_CARD";
+          def fromId := _fromId;
+          def sessionId := _sessionId;
+          def card := nil;
+      };
+  };
+
+  // 3. Jouer un NOPE
+  def makeNopeOp(_fromId, _sessionId, _atCard) {
+      isolate: {
+          def uuid := UUID.randomUUID().toString();
+          def type := "PLAY_NOPE";
+          def fromId := _fromId;
+          def sessionId := _sessionId;
+          def card := _atCard;
+      };
+  };
+
+  // 4. Jouer une PAIRE (Vol aléatoire)
+  def makePairOp(_fromId, _sessionId, _atCard, _targetId, _stealIdx) {
+      isolate: {
+          def uuid := UUID.randomUUID().toString();
+          def type := "PLAY_PAIR";
+          def fromId := _fromId;
+          def sessionId := _sessionId;
+          def card := _atCard;
+          def targetPlayer := _targetId;
+          def stealIndex := _stealIdx;
+      };
+  };
+
+  // 5. Jouer un TRIPLE (Demande précise)
+  def makeTripleOp(_fromId, _sessionId, _atCard, _targetId, _reqType, _reqVar) {
+      isolate: {
+          def uuid := UUID.randomUUID().toString();
+          def type := "PLAY_TRIPLE";
+          def fromId := _fromId;
+          def sessionId := _sessionId;
+          def card := _atCard;
+          def targetPlayer := _targetId;
+          def reqType := _reqType;
+          def reqVariant := _reqVar;
+      };
+  };
+
+  // 6. Jouer le COMBO 5 (Récupérer défausse)
+  def makeSpecial5Op(_fromId, _sessionId) {
+      isolate: {
+          def uuid := UUID.randomUUID().toString();
+          def type := "PLAY_SPECIAL_5";
+          def fromId := _fromId;
+          def sessionId := _sessionId;
+          def card := nil;
+      };
+  };
+
+  // 7. Action suite au Combo 5 (Prendre carte)
+  def makeTakeDiscardOp(_fromId, _sessionId, _targetAtCard) {
+      isolate: {
+          def uuid := UUID.randomUUID().toString();
+          def type := "TAKE_DISCARD";
+          def fromId := _fromId;
+          def sessionId := _sessionId;
+          def card := _targetAtCard;
+      };
+  };
+
+  // 8. Jouer un DEFUSE
+  def makeDefuseOp(_fromId, _sessionId, _atCard, _insertIndex) {
+      isolate: {
+          def uuid := UUID.randomUUID().toString();
+          def type := "DEFUSE_KITTEN";
+          def fromId := _fromId;
+          def sessionId := _sessionId;
+          def card := _atCard;
+          def insertIndex := _insertIndex;
+          def shuffleData := [];
+      };
+  };
+
+  // 9. Jouer une carte CLASSIQUE (Attack, Skip, Shuffle, Favor, Future...)
+  def makePlayCardOp(_fromId, _sessionId, _atCard, _targetId, _seeds) {
+      isolate: {
+          def uuid := UUID.randomUUID().toString();
+          def type := "PLAY_CARD";
+          def fromId := _fromId;
+          def sessionId := _sessionId;
+          def card := _atCard;
+          def targetPlayer := _targetId;
+          def shuffleData := _seeds;
+      };
+  };
+
+  // 10. Donner une carte (Réponse à Favor / Vol)
+  def makeGiveCardOp(_fromId, _sessionId, _toId, _atCard) {
+      isolate: {
+          def uuid := UUID.randomUUID().toString();
+          def type := "GIVE_CARD";
+          def fromId := _fromId;
+          def sessionId := _sessionId;
+          def toId := _toId;
+          def card := _atCard;
+      };
+  };
+};
