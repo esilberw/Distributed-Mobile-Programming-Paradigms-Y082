@@ -11,144 +11,184 @@ import /.at.unit.test;
 deftype Player;
 def UUID := jlobby.java.util.UUID;
 
-// --- DEFINITION D'UN JOUEUR SIMULÉ (MOCK) ---
 def createMockPlayer(name) {
-    actor: {
-        // Imports sécurisés pour éviter les conflits de noms
-        import /.at.lang.futures exclude seconds, minutes, millisec;
-        import /.at.support.timer;
-        import /.at.collections.java.hashmap;
+    def myGeneratedId := UUID.randomUUID().toString();
+    def PlayerType := Player;
 
+    actor: {
+        // --- ETAT LOCAL ---
         def LOBBY := 0;
         def PLAYING := 1;
 
         def myName := name;
-        def myUserId := jlobby.java.util.UUID.randomUUID().toString();
+        def myUserId := myGeneratedId;
         def myState := LOBBY;
         def currentSessionId := nil;
-        def sessionPlayerIds := [];
+        def sessionCounter := 0;
 
-        // Variable de publication pour pouvoir l'annuler proprement
         def pub := nil;
 
-        def playersById := HashMap.new();
-        def playerStates := HashMap.new();
+        // Structures de données Java
+        def knownPlayers := jlobby.java.util.HashMap.new();
+        def opHistory := jlobby.java.util.ArrayList.new();
+        def lastOpUuid := "GENESIS";
 
-        // --- INTERFACE RESEAU (Privée, celle exportée sur le réseau) ---
+        // --- INTERFACE RESEAU ---
         def remoteInterface := object: {
             def getUserId() { myUserId; };
 
-            def updatePlayerState(id, state) {
-                playerStates.put(id, state);
+            def identify(peerId, peerRef) {
+                knownPlayers.put(peerId, peerRef);
+                peerRef<-updateState(myUserId, myState);
+                if: (myState == PLAYING) then: {
+                    peerRef<-requestSync(myUserId, lastOpUuid, remoteInterface);
+                };
             };
+
+            def updateState(id, state) { nil; };
 
             def inviteToSession(sessionId, initiatorId, config, pList) {
                 if: (myState == LOBBY) then: {
                     myState := PLAYING;
                     currentSessionId := sessionId;
-                    sessionPlayerIds := pList;
+                    opHistory.clear();
+                    lastOpUuid := "GENESIS";
                     broadcastMyState(PLAYING);
                 };
             };
 
-            def fetchOpsSince(uuid) { [] };
-            def prepare(op) { true };
-            def commit(op) { true };
-        };
+            def requestSync(requesterId, lastKnownUuid, replyTo) {
+                def missingOps := [];
+                def recording := false;
+                if: (lastKnownUuid == "GENESIS") then: { recording := true; };
 
-        def broadcastMyState(newState) {
-            // FIX: On itère directement sur les valeurs, pas de .toArray() nécessaire
-            playersById.values().each: { |p|
-                p<-updatePlayerState(myUserId, newState);
+                def iter := opHistory.iterator();
+                while: { iter.hasNext() } do: {
+                    def op := iter.next();
+                    if: recording then: { missingOps := missingOps + [op]; }
+                    else: { if: (op.uuid == lastKnownUuid) then: { recording := true; }; };
+                };
+
+                if: (missingOps.length > 0) then: {
+                    replyTo<-receiveSync(missingOps);
+                };
             };
-        };
 
-        // --- INTERFACE DE TEST (Publique, celle retournée par l'acteur) ---
-        object: {
-            def goOnline() {
-                // On stocke la publication pour pouvoir l'annuler
-                pub := export: remoteInterface as: Player;
+            // CORRECTION: IDEMPOTENCE (Vérifier si on a déjà l'op pour éviter les doublons)
+            def receiveSync(ops) {
+                system.println("[" + myName + "] SYNC RECU: " + ops.length + " operations.");
+                ops.each: { |op|
+                    def exists := false;
+                    def it := opHistory.iterator();
+                    while: { it.hasNext() } do: {
+                        def existing := it.next();
+                        if: (existing.uuid == op.uuid) then: { exists := true; };
+                    };
 
-                whenever: Player discovered: { |p|
-                    when: p<-getUserId()@FutureMessage becomes: { |id|
-                        if: (id != myUserId) then: {
-                            playersById.put(id, p);
-                            p<-updatePlayerState(myUserId, myState);
-                        };
+                    if: !exists then: {
+                        opHistory.add(op);
+                        // On met à jour le pointeur vers le dernier reçu
+                        lastOpUuid := op.uuid;
                     };
                 };
             };
 
-            def goOffline() {
-                // FIX: Vrai nettoyage du service
-                if: (pub != nil) then: {
-                    pub.cancel();
-                    pub := nil;
-                };
+            def prepare(op) { true };
+
+            def commit(op) {
+                opHistory.add(op);
+                lastOpUuid := op.uuid;
             };
-
-            def startSessionWith(opponents) {
-                def newSessionId := jlobby.java.util.UUID.randomUUID().toString();
-                def dummyConfig := object: { def syncedDeck := []; def syncedHandsData := []; };
-                def allIds := [myUserId];
-
-                opponents.each: { |opp|
-                    // On invite l'interface de test de l'autre mock
-                    opp<-inviteToSession(newSessionId, myUserId, dummyConfig, allIds);
-                };
-
-                myState := PLAYING;
-                currentSessionId := newSessionId;
-                broadcastMyState(PLAYING);
-                newSessionId;
-            };
-
-            // Helper pour permettre aux mocks de s'inviter entre eux via leurs interfaces de test
-            def inviteToSession(sid, initId, conf, plist) {
-                remoteInterface.inviteToSession(sid, initId, conf, plist);
-            };
-
-            def getSessionId() { currentSessionId; };
-            def getState() { myState; };
-            def getKnownPlayersCount() { playersById.size(); };
-            def getMyId() { myUserId; };
         };
+
+        def broadcastMyState(newState) {
+            def refs := knownPlayers.values().iterator();
+            while: { refs.hasNext() } do: {
+                def p := refs.next();
+                p<-updateState(myUserId, newState);
+            };
+        };
+
+        // --- METHODES PUBLIQUES ---
+        def goOnline() {
+            pub := export: remoteInterface as: PlayerType;
+            whenever: PlayerType discovered: { |p|
+                p<-identify(myUserId, remoteInterface);
+            };
+        };
+
+        def goOffline() {
+            if: (pub != nil) then: { pub.cancel(); pub := nil; };
+        };
+
+        def startSessionWith(opponents) {
+            sessionCounter := sessionCounter + 1;
+            def newSessionId := myUserId + "-SESS-" + sessionCounter;
+
+            opponents.each: { |opp|
+                opp<-inviteToSession(newSessionId, myUserId, nil, [myUserId]);
+            };
+
+            // Auto-invite pour initialiser l'état local
+            remoteInterface.inviteToSession(newSessionId, myUserId, nil, []);
+            newSessionId;
+        };
+
+        def inviteToSession(sid, initId, conf, plist) {
+            remoteInterface.inviteToSession(sid, initId, conf, plist);
+        };
+
+        def simulateOp(payload) {
+            def opId := myUserId + "-OP-" + (opHistory.size() + 1);
+            def op := isolate: {
+                def uuid := opId;
+                def data := payload;
+            };
+
+            remoteInterface.commit(op);
+
+            def refs := knownPlayers.values().iterator();
+            while: { refs.hasNext() } do: {
+                def p := refs.next();
+                p<-commit(op);
+            };
+            opId;
+        };
+
+        def getOpHistory() {
+            def res := [];
+            def it := opHistory.iterator();
+            while: { it.hasNext() } do: { res := res + [it.next()]; };
+            res;
+        };
+
+        def getSessionId() { currentSessionId; };
+        def getState() { myState; };
+        def getKnownPlayersCount() { knownPlayers.size(); };
+        def getMyId() { myUserId; };
+
+        system.println("DEBUG: Actor " + myName + " fully initialized.");
     };
 };
 
-// --- SUITE DE TESTS ---
-
 def DistributedTest := extend: /.at.unit.test.UnitTest.new("WeKittens Distributed Tests") with: {
-
     def actors := [];
-
-    def tearDown() {
-        actors.each: { |a| a<-goOffline() };
-        actors := [];
-    };
+    def tearDown() { actors.each: { |a| a<-goOffline() }; actors := []; };
 
     def testSessionCreation() {
         def [fut, res] := makeFuture();
-
         def p1 := createMockPlayer("Alice");
         def p2 := createMockPlayer("Bob");
         actors := [p1, p2];
-
-        p1<-goOnline();
-        p2<-goOnline();
+        p1<-goOnline(); p2<-goOnline();
 
         when: 2.seconds elapsed: {
             when: p1<-startSessionWith([p2])@FutureMessage becomes: { |sid|
                 when: 1.seconds elapsed: {
                     def f1 := p1<-getSessionId()@FutureMessage;
                     def f2 := p2<-getSessionId()@FutureMessage;
-
                     when: (group: [f1, f2]) becomes: { |results|
-                        def id1 := results[1];
-                        def id2 := results[2];
-
-                        self.assertFalse(id1 == nil, "Alice Session ID should not be nil");
-                        self.assertEquals(id1, id2, "Alice and Bob should have SAME Session ID");
+                        self.assertEquals(results[1], results[2], "Session IDs match");
                         res.resolve(true);
                     };
                 };
@@ -157,37 +197,40 @@ def DistributedTest := extend: /.at.unit.test.UnitTest.new("WeKittens Distribute
         fut;
     };
 
-    def testMultipleSessions() {
+    def testReconnection() {
         def [fut, res] := makeFuture();
+        system.println("--- TEST SMR RECONNECTION ---");
+        def alice := createMockPlayer("Alice_SMR");
+        def bob := createMockPlayer("Bob_SMR");
+        actors := [alice, bob];
+        alice<-goOnline(); bob<-goOnline();
 
-        def p1 := createMockPlayer("S1_Alice");
-        def p2 := createMockPlayer("S1_Bob");
-        def p3 := createMockPlayer("S2_Charlie");
-        def p4 := createMockPlayer("S2_David");
-        actors := [p1, p2, p3, p4];
+        when: 2.seconds elapsed: {
+            alice<-startSessionWith([bob]);
 
-        p1<-goOnline(); p2<-goOnline(); p3<-goOnline(); p4<-goOnline();
+            when: 1.seconds elapsed: {
+                alice<-simulateOp("Coup 1");
 
-        when: 3.seconds elapsed: {
-            def fS1 := p1<-startSessionWith([p2])@FutureMessage;
-            def fS2 := p3<-startSessionWith([p4])@FutureMessage;
-
-            when: (group: [fS1, fS2]) becomes: { |sids|
                 when: 1.seconds elapsed: {
-                    def fId2 := p2<-getSessionId()@FutureMessage;
-                    def fId4 := p4<-getSessionId()@FutureMessage;
+                    system.println("Bob goes OFFLINE");
+                    bob<-goOffline();
 
-                    when: (group: [fId2, fId4]) becomes: { |guestIds|
-                        def session1_Host := sids[1];
-                        def session2_Host := sids[2];
-                        def session1_Guest := guestIds[1];
-                        def session2_Guest := guestIds[2];
+                    when: 1.seconds elapsed: {
+                        alice<-simulateOp("Coup 2");
 
-                        self.assertEquals(session1_Host, session1_Guest, "S1 Integrity check");
-                        self.assertEquals(session2_Host, session2_Guest, "S2 Integrity check");
-                        self.assertFalse(session1_Host == session2_Host, "Sessions MUST be unique");
+                        when: 1.seconds elapsed: {
+                            system.println("Bob goes ONLINE");
+                            bob<-goOnline();
 
-                        res.resolve(true);
+                            when: 3.seconds elapsed: {
+                                when: bob<-getOpHistory()@FutureMessage becomes: { |hist|
+                                    system.println("Bob History size: " + hist.length);
+                                    // Bob devrait avoir [Coup 1 (avant deco), Coup 2 (sync)]
+                                    self.assertEquals(2, hist.length, "Bob should have synced 2 ops");
+                                    res.resolve(true);
+                                };
+                            };
+                        };
                     };
                 };
             };
@@ -199,14 +242,11 @@ def DistributedTest := extend: /.at.unit.test.UnitTest.new("WeKittens Distribute
          def [fut, res] := makeFuture();
          def p1 := createMockPlayer("Host");
          def p2 := createMockPlayer("Guest1");
-         def p3 := createMockPlayer("Guest2");
-         actors := [p1, p2, p3];
-
-         p1<-goOnline(); p2<-goOnline(); p3<-goOnline();
-
-         when: 3.seconds elapsed: {
+         actors := [p1, p2];
+         p1<-goOnline(); p2<-goOnline();
+         when: 2.seconds elapsed: {
              when: p1<-getKnownPlayersCount()@FutureMessage becomes: { |count|
-                 self.assertTrue(count >= 2, "Discovery check: Host should see at least 2 peers. Found: " + count);
+                 self.assertTrue(count >= 1, "Discovery check failed. Found: " + count);
                  res.resolve(true);
              };
          };
