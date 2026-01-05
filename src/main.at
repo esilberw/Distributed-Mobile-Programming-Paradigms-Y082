@@ -3,7 +3,6 @@ import /.at.lang.multifutures;
 
 import ~.data;
 import ~.gameRules;
-// On capture l'objet operations
 def Operations := object: { import ~.operations; };
 
 import /.at.collections.java.hashmap;
@@ -21,10 +20,13 @@ def MAX_PLAYERS := 4;
 def MIN_PLAYERS := 2;
 
 def VOTE_TIMEOUT := 2.seconds;
+
 def log(text){ system.println("[AT] " + text); };
 
 def UUID := jlobby.java.util.UUID;
 def WeKittensApp := jlobby.weKittens.WeKittensApp;
+
+
 def makeAmbientKittens() {
   def gui;
 
@@ -32,10 +34,11 @@ def makeAmbientKittens() {
   def myState := LOBBY;
   def currentSessionId := nil;
   def myUserId := UUID.randomUUID().toString();
+  def isTimerRunning := false;
+
   def gameModel := nil;
   def opHistory := [];
   def lastOpUuid := "GENESIS";
-  def isTimerRunning := false;
 
   def playersById  := HashMap.new();
   def playerStates := HashMap.new();
@@ -56,7 +59,7 @@ def makeAmbientKittens() {
       def candidates := [];
       playerIdsList.each: { |id|
           def state := playerStates.get(id);
-          if: (state == nil) then: { state := LOBBY; };
+          if: (state == nil) then: { state := LOBBY; }; // recover disconnection
           if: (state == LOBBY) then: {
               candidates := candidates + [ playersById.get(id) ];
           };
@@ -78,11 +81,11 @@ def makeAmbientKittens() {
       iAmLeader;
   };
 
-   def updateJavaHand(pid) {
+   def updateJavaHand(playerId) {
        gui.clearHand();
-       def myHand := gameModel.getHand(pid);
+       def myHand := gameModel.getHand(playerId);
        if: (myHand != nil) then: {
-           // system.println("[GUI] Synchronisation de " + myHand.length + " cartes...");
+           system.println("[GUI] Synch of " + myHand.length + " cards");
            myHand.each: { |atCard|
                gui.addCardToHand(atCard.type, atCard.variant);
            };
@@ -90,9 +93,9 @@ def makeAmbientKittens() {
    };
 
   def updateTurnDisplay() {
-      def currentPid := gameModel.getCurrentPlayer();
+      def currentPlayerId := gameModel.getCurrentPlayer();
       def turns := gameModel.getTurnsLeft();
-      def isMe := (currentPid == myUserId);
+      def isMe := (currentPlayerId == myUserId);
 
       def msg := "";
       if: isMe then: {
@@ -112,10 +115,11 @@ def makeAmbientKittens() {
           } else: {
               opponents := availablePlayers;
           };
+
           sessionPlayerIds := [myUserId];
           playerIdsList.each: { |id|
-             def pRef := playersById.get(id);
-             if: (opponents.contains(pRef)) then: {
+             def playerRef := playersById.get(id);
+             if: (opponents.contains(playerRef)) then: {
                  sessionPlayerIds := sessionPlayerIds + [id];
              };
           };
@@ -136,8 +140,8 @@ def makeAmbientKittens() {
 
           log(">>> STARTING SESSION : " + currentSessionId);
           log(">>> Players : " + sessionPlayerIds.length);
-          opponents.each: { |p|
-              p<-inviteToSession(currentSessionId, myUserId, config, sessionPlayerIds);
+          opponents.each: { |player|
+              player<-inviteToSession(currentSessionId, myUserId, config, sessionPlayerIds);
           };
           localInterface.showMessage("Started session as Host.");
       };
@@ -163,7 +167,7 @@ def makeAmbientKittens() {
                       when: DELAY_START_SESSION elapsed: {
                           isTimerRunning := false;
                           if: (myState == LOBBY) then: {
-                              def finalCount := getAvailablePlayers().length + 1;
+                              def finalCount := getAvailablePlayers().length + 1;  // Don't forget to add ourself.
                               if: (finalCount >= MIN_PLAYERS) then: {
                                   if: (amITheLeader(getAvailablePlayers())) then: {
                                       log("Timeout & I am Leader. Starting session.");
@@ -172,7 +176,7 @@ def makeAmbientKittens() {
                                       log("Timeout. I am NOT Leader. Waiting.");
                                   };
                               } else: {
-                                  log("Timeout elapsed but players left.");
+                                  log("Timeout elapsed but players left."); // case could occur
                               };
                           };
                       };
@@ -183,7 +187,6 @@ def makeAmbientKittens() {
   };
 
   def localInterface := object: {
-      def updateTurnStatus(message, isMyTurn) { nil; };
 
       def leaveSpectatingMode() {
           log("GUI requested to LEAVE SPECTATING MODE -> Calling leaveSession().");
@@ -191,7 +194,7 @@ def makeAmbientKittens() {
       };
 
       def leaveSession() {
-          log("GUI requested to LEAVE SESSION (Active/Forfeit).");
+          log("GUI requested to LEAVE SESSION.");
           if: (myState == PLAYING) then: {
               def op := Operations.makePlayerLeftOp(myUserId, currentSessionId);
               performTwoPhaseCommit(op);
@@ -244,8 +247,8 @@ def makeAmbientKittens() {
                    def myIndex := 0;
                    def count := sessionPlayerIds.length;
                    def i := 0;
-                   sessionPlayerIds.each: { |pid|
-                       if: (pid == myUserId) then: { myIndex := i; };
+                   sessionPlayerIds.each: { |playerId|
+                       if: (playerId == myUserId) then: { myIndex := i; };
                        i := i + 1;
                    };
                    def offset := targetRel;
@@ -256,6 +259,21 @@ def makeAmbientKittens() {
              targetId;
       };
 
+      def getRelativeIndex(targetId) {
+           def myIndex := -1;
+           def targetIndex := -1;
+           def count := sessionPlayerIds.length;
+           def i := 0;
+           sessionPlayerIds.each: { |playerId|
+               if: (playerId == myUserId) then: { myIndex := i; };
+               if: (playerId == targetId) then: { targetIndex := i; };
+               i := i + 1;
+           };
+           def relative := (targetIndex - myIndex + count) % count;
+           if: (count == 2) then: { if: (relative == 1) then: { relative := 2; }; };
+           relative;
+      };
+
       def getOpponentHandSize(targetRel) {
            def size := 1;
            if: (myState == PLAYING) then: {
@@ -264,46 +282,46 @@ def makeAmbientKittens() {
                    def hand := gameModel.getHand(targetId);
                    if: (hand != nil) then: {
                        size := hand.length;
-                       system.println("[CHEAT] Taille main cible (" + targetId + ") : " + size);
+                       system.println("[INFO] Opponent hand size (" + targetId + ") : " + size);
                    };
                };
            };
            size;
       };
 
-      def pairPlayed(jCard, targetRel, stealIdx) {
+      def pairPlayed(jCard, targetRel, stealCardIdx) {
            def decision := false;
            if: (myState == PLAYING) then: {
                def aCard := atCardFromJCard(jCard);
                def targetId := getTargetIdFromRelative(targetRel);
 
                if: (targetId != nil) then: {
-                   system.println("[PAIR] Playing pair on " + targetId + " index " + stealIdx);
-                   def op := Operations.makePairOp(myUserId, currentSessionId, aCard, targetId, stealIdx);
+                   system.println("[PAIR] Playing pair on " + targetId + " index " + stealCardIdx);
+                   def op := Operations.makePairOp(myUserId, currentSessionId, aCard, targetId, stealCardIdx);
                    if: (gameModel.validateMove(op)) then: {
                        performTwoPhaseCommit(op);
                        decision := true;
                    } else: {
-                       log("Pair move refused (Rules check failed).");
+                       log("Pair move refused (gameRules check failed).");
                    };
                };
            };
            decision;
       };
 
-      def triplePlayed(jCard, targetRel, rType, rVar) {
+      def triplePlayed(jCard, targetRel, requestedType, requestedVar) {
             def decision := false;
             if: (myState == PLAYING) then: {
                 def aCard := atCardFromJCard(jCard);
                 def targetId := getTargetIdFromRelative(targetRel);
                 if: (targetId != nil) then: {
-                    system.println("[TRIPLE] Asking " + targetId + " for " + rType + " (" + rVar + ")");
-                    def op := Operations.makeTripleOp(myUserId, currentSessionId, aCard, targetId, rType, rVar);
+                    system.println("[TRIPLE] Asking " + targetId + " for " + requestedType + " (" + requestedVar + ")");
+                    def op := Operations.makeTripleOp(myUserId, currentSessionId, aCard, targetId, requestedType, requestedVar);
                     if: (gameModel.validateMove(op)) then: {
                         performTwoPhaseCommit(op);
                         decision := true;
                     } else: {
-                        log("Triple move refused (Rules check failed).");
+                        log("Triple move refused (gameRules check failed).");
                     };
                 };
             };
@@ -324,10 +342,10 @@ def makeAmbientKittens() {
            decision;
       };
 
-      def pickFromDiscard(cType, cVar) {
+      def pickFromDiscard(cardType, cardVar) {
            def decision := false;
            if: (myState == PLAYING) then: {
-               def targetCard := atCard.new(cType, cVar);
+               def targetCard := atCard.new(cardType, cardVar);
                def op := Operations.makeTakeDiscardOp(myUserId, currentSessionId, targetCard);
                if: (gameModel.validateMove(op)) then: {
                    performTwoPhaseCommit(op);
@@ -343,38 +361,40 @@ def makeAmbientKittens() {
               def decision := false;
               if: (myState == PLAYING) then: {
                    def aCard := atCardFromJCard(jCard);
+
                    if: (aCard.type == "defuse") then: {
-                       system.println("[GUI] Defuse détecté. Libération UI + Popup Async.");
+                       system.println("[GUI] Defuse detected. Free GUI.");
                        decision := true;
                        when: 0.seconds elapsed: {
-                           def max := gameModel.getDeckSize();
-                           def idx := gui.askInsertionIndex(max);
-                           def op := Operations.makeDefuseOp(myUserId, currentSessionId, aCard, idx);
+                           def maxDeckIdx := gameModel.getDeckSize();
+                           def chosenIdx := gui.askInsertionIndex(maxDeckIdx);
+                           def op := Operations.makeDefuseOp(myUserId, currentSessionId, aCard, chosenIdx);
                            if: (gameModel.validateMove(op)) then: {
                                performTwoPhaseCommit(op);
                            } else: {
-                               log("Defuse annulé ou invalide.");
+                               log("Defuse invalid.");
                                updateJavaHand(myUserId);
                            };
                        };
-                   } else: {
+                   }
+                   else: {
                        def targetId := nil;
                        if: (aCard.type == "favor") then: {
                            if: (targetInfo != -1) then: {
                                def myIndex := 0;
                                def count := sessionPlayerIds.length;
                                def i := 0;
-                               sessionPlayerIds.each: { |pid|
-                                   if: (pid == myUserId) then: { myIndex := i; };
+                               sessionPlayerIds.each: { |playerId|
+                                   if: (playerId == myUserId) then: { myIndex := i; };
                                    i := i + 1;
                                };
                                def offset := targetInfo;
                                if: (count == 2) then: { offset := 1; };
                                def targetIndex := (myIndex + offset) % count;
                                targetId := sessionPlayerIds[targetIndex + 1];
-                               system.println("[FAVOR] Cible validée : " + targetId);
+                               system.println("[FAVOR] Target validated : " + targetId);
                            } else: {
-                               system.println("[FAVOR] Erreur cible.");
+                               system.println("[FAVOR] target error");
                            };
                        };
 
@@ -388,7 +408,7 @@ def makeAmbientKittens() {
                            performTwoPhaseCommit(op);
                            decision := true;
                        } else: {
-                           log("Move refused by local rules (Turn? Cards?).");
+                           log("Move refused by local rules.");
                        };
                    };
               } else: {
@@ -396,35 +416,38 @@ def makeAmbientKittens() {
               };
               decision;
       };
-      def showMessage(msg) { log("GUI MSG: " + msg); };
+      def showMessage(msg) { log("| {GUI MSG} " + msg); };
   };
 
   def performTwoPhaseCommit(op) {
       def voters := [];
       sessionPlayerIds.each: { |id|
           if: !(id == myUserId) then: {
-              def pRef := playersById.get(id);
-              if: !(pRef == nil) then: { voters := voters + [pRef]; };
+              def playerRef := playersById.get(id);
+              if: !(playerRef == nil) then: { voters := voters + [playerRef]; };
           };
       };
 
-      def activeParticipants := voters.length + 1;
+      def activeParticipants := voters.length + 1; // add ourself in the count
       def quorum := (activeParticipants / 2).floor() + 1;
-      system.println("[2PC] Voting... Need " + quorum + " votes (Active: " + activeParticipants + ")");
-      def futures := voters.map: { |p|
-          def pair := /.at.lang.futures.makeFuture();
-          def fut := pair[1];
-          def resolver := pair[2];
-          when: p<-prepare(op)@FutureMessage becomes: { |val|
-              try: { resolver.resolve(val); } catch: { |e| };
-          } catch: { |e| try: { resolver.resolve(false); } catch: { |e| }; };
+      system.println("[2PC] Voting Phase -> Need " + quorum + " votes (Active: " + activeParticipants + ")");
+
+      def futures := voters.map: { |player|
+          def [fut, resolver] := /.at.lang.futures.makeFuture();
+
+          when: player<-prepare(op)@FutureMessage becomes: { |validation|
+              try: { resolver.resolve(validation); } catch: { |e| };
+          } catch: {|e|
+                        try: { resolver.resolve(false); }
+                            catch: { |e| }; };
+
           when: VOTE_TIMEOUT elapsed: { try: { resolver.resolve(false); } catch: { |e| }; };
           fut;
       };
 
       when: (group: futures) becomes: { |votes|
           def yesVotes := 1;
-          votes.each: { |v| if: (v == true) then: { yesVotes := yesVotes + 1; }; };
+          votes.each: { |vote| if: (vote == true) then: { yesVotes := yesVotes + 1; }; };
 
           def localValid := false;
           if: (gameModel != nil) then: {
@@ -439,11 +462,11 @@ def makeAmbientKittens() {
           if: !localValid then: { yesVotes := 0; };
           system.println("[2PC] Result: " + yesVotes + " YES votes.");
           if: (yesVotes >= quorum) then: {
-              system.println("[2PC] QUORUM REACHED. COMMIT.");
+              system.println("[2PC] QUORUM REACHED ! COMMIT !");
               commitLocally(op);
-              voters.each: { |p| p<-commit(op); };
+              voters.each: { |player| player<-commit(op); }; //coordinator orders all other players to apply the op
           } else: {
-              log("2PC ABORTED (No Quorum).");
+              log("2PC ABORTED - No Quorum !");
           };
       };
   };
@@ -453,40 +476,47 @@ def makeAmbientKittens() {
        lastOpUuid := op.uuid;
 
        if: (gameModel == nil) then: {
-           system.println("[WARN] Tentative de commitLocally sur un modèle nil (Ignoré).");
+           system.println("[WARN] comite on nil model -> player left the game");
        } else: {
            def res := gameModel.applyMove(op);
 
-           // GESTION NOPE
-           if: (res == "ACTION_CANCELLED") then: {
-               localInterface.showMessage("NOPE! Action précédente annulée.");
+           // NOPE HANDLE
+           if: (res == "ACTION_CANCELED") then: {
+               localInterface.showMessage("NOPE! previous aciton canceled.");
                if: (op.fromId != myUserId) then: { gui.playCardOpponent("nope", op.card.variant); };
-               updateJavaHand(myUserId); updateTurnDisplay();
+               updateJavaHand(myUserId);
+               updateTurnDisplay();
            };
+
            if: (res == "ACTION_RESTORED") then: {
-               localInterface.showMessage("YUP! Action rétablie.");
+               localInterface.showMessage("YUP! Action restored");
                if: (op.fromId != myUserId) then: { gui.playCardOpponent("nope", op.card.variant); };
-               updateJavaHand(myUserId); updateTurnDisplay();
+               updateJavaHand(myUserId);
+               updateTurnDisplay();
            };
+
            if: (res == "NOPE_PREEMPTIVE") then: {
-               localInterface.showMessage("NOPE PREVENTIF ACTIF! Le jeu est bloqué.");
+               localInterface.showMessage("PREEMPRITVE NOPE ACTIVATED! Game is stopped.");
                if: (op.fromId != myUserId) then: { gui.playCardOpponent("nope", op.card.variant); };
                updateJavaHand(myUserId);
            };
+
            if: (res == "BLOCKED_BY_NOPE") then: {
-               localInterface.showMessage("ACTION BLOQUEE par un Nope actif!");
+               localInterface.showMessage("ACTION BLOCKED by active nope");
                updateJavaHand(myUserId);
            };
+
            if: (res == "NOPE_USELESS") then: {
-               localInterface.showMessage("Nope inutile.");
+               localInterface.showMessage("Useledd Nope.");
                if: (op.fromId != myUserId) then: { gui.playCardOpponent("nope", op.card.variant); };
            };
 
            if: (op.type == "DRAW_CARD") then: {
                if: (op.fromId == myUserId) then: {
-                   // FIX : Initialisation robuste de status
+
                    def status := res;
                    def cardObj := nil;
+
                    try: {
                        if: (res.length == 2) then: { status := res[1]; cardObj := res[2]; };
                    } catch: { |e| };
@@ -495,10 +525,11 @@ def makeAmbientKittens() {
                         def variant := "a";
                         if: (cardObj != nil) then: { variant := cardObj.variant; };
                         gui.showExplosionAlert(variant);
-                        // FIX: on update toute la main
+                        // FIX: all op update the hand
                         updateJavaHand(myUserId);
-                        localInterface.showMessage("DEFUSE REQUIS !");
+                        localInterface.showMessage("Need Defuse !");
                    };
+
                    if: ((status == "DIED").or: {status == "WINNER"}) then: {
                         def variant := "a";
                         if: (cardObj != nil) then: { variant := cardObj.variant; };
@@ -507,13 +538,15 @@ def makeAmbientKittens() {
                         def top := gameModel.getDiscardTop();
                         if: (top != nil) then: { gui.playCardOpponent(top.type, top.variant); };
                    };
+
                    if: (status == "EMPTY") then: { localInterface.showMessage("La pioche est vide !"); };
 
                    if: (status == "DRAW_OK") then: {
-                       // FIX CRITIQUE : FORCE LA MISE A JOUR VISUELLE COMPLETE
+                       // FIX: all op update the hand
                        updateJavaHand(myUserId);
                    };
-               } else: {
+               }
+               else: {
                    def status := "UNKNOWN";
                    try: { if: (res.length == 2) then: { status := res[1]; }; } catch: { |e| };
                    if: ((status == "DIED").or: {status == "WINNER"}) then: {
@@ -526,17 +559,17 @@ def makeAmbientKittens() {
            };
 
            if: (op.type == "PLAYER_LEFT") then: {
-                localInterface.showMessage("Joueur " + op.fromId + " a quitté la partie.");
+                localInterface.showMessage("Player " + op.fromId + " left the game.");
                 markDeadOpponent(op.fromId);
                 def top := gameModel.getDiscardTop();
                 if: (top != nil) then: { gui.playCardOpponent(top.type, top.variant); };
                 if: (res == "WINNER") then: { gui.showWinMessage(); };
                 sessionPlayerIds := sessionPlayerIds.filter: { |id| id != op.fromId };
-                system.println("[NET] Joueur retiré des votants. Nouveaux votants: " + sessionPlayerIds.length);
+                system.println("[NET] Player removed from voters. New ovters " + sessionPlayerIds.length);
            };
 
            if: (op.type == "DEFUSE_KITTEN") then: {
-               localInterface.showMessage("Ouf ! Bombe désamorcée par " + op.fromId);
+               localInterface.showMessage("Bombe defused by " + op.fromId);
                if: (op.fromId != myUserId) then: { gui.playCardOpponent(op.card.type, op.card.variant); };
                if: (op.fromId == myUserId) then: { updateJavaHand(myUserId); };
            };
@@ -548,28 +581,34 @@ def makeAmbientKittens() {
                    try: {
                        if: (res.length == 2) then: { status := res[1]; peekCards := res[2]; };
                    } catch: { |e| status := res; };
+
                    if: (status == "PEEK_FUTURE") then: {
-                        system.println("[FUTURE] Affichage des 3 cartes...");
+                        system.println("[FUTURE] Display 3 top cards...");
                         def typesList := jlobby.java.util.ArrayList.new();
                         def varsList := jlobby.java.util.ArrayList.new();
-                        peekCards.each: { |c| typesList.add(c.type); varsList.add(c.variant); };
+
+                        peekCards.each: { |card|
+                            typesList.add(card.type);
+                            varsList.add(card.variant); };
+
                         gui.showSeeTheFuture(typesList, varsList);
                    };
-                   // FIX CRITIQUE : on force la mise à jour pour s'assurer que la carte jouée disparaît bien
+                   // FIX: all op update the hand, to ensure that the played card disappear from the hand player
                    updateJavaHand(myUserId);
-               } else: {
+               }
+               else: {
                    if: (op.card.type != "nope") then: { gui.playCardOpponent(op.card.type, op.card.variant); };
                    if: (op.card.type == "favor") then: {
                        def target := op.targetPlayer;
                        if: ((target == nil).or: { target == myUserId }) then: {
-                           system.println("[FAVOR] Je suis ciblé par " + op.fromId);
+                           system.println("[FAVOR] I am the target of " + op.fromId);
                            def choiceString := gui.askCardToGive();
                            if: (choiceString != nil) then: {
                                def myHand := gameModel.getHand(myUserId);
                                def cardToGive := nil;
-                               myHand.each: { |c|
-                                   def name := c.type + " (" + c.variant + ")";
-                                   if: ((cardToGive == nil).and: { name == choiceString }) then: { cardToGive := c; };
+                               myHand.each: { |card|
+                                   def name := card.type + " (" + card.variant + ")";
+                                   if: ((cardToGive == nil).and: { name == choiceString }) then: { cardToGive := card; };
                                };
                                if: (cardToGive != nil) then: {
                                    def giveOp := Operations.makeGiveCardOp(myUserId, currentSessionId, op.fromId, cardToGive);
@@ -577,14 +616,14 @@ def makeAmbientKittens() {
                                };
                            };
                        } else: {
-                           system.println("[FAVOR] Ouf, ce n'est pas pour moi. Cible: " + target);
+                           system.println("[FAVOR] Target: " + target);
                        };
                    };
                };
            };
 
            if: (op.type == "GIVE_CARD") then: {
-               localInterface.showMessage("Echange : " + op.fromId + " a donné une carte à " + op.toId);
+               localInterface.showMessage("Exchange : " + op.fromId + " gave a card to " + op.toId);
                if: ((op.fromId == myUserId).or: { op.toId == myUserId }) then: { updateJavaHand(myUserId); };
            };
 
@@ -592,20 +631,23 @@ def makeAmbientKittens() {
                if: (op.fromId != myUserId) then: { gui.playCardOpponent(op.card.type, op.card.variant); };
                if: (op.fromId == myUserId) then: {
                    updateJavaHand(myUserId);
-                   localInterface.showMessage("Vol lancé sur joueur " + op.targetPlayer);
-               } else: {
+                   localInterface.showMessage("PLaye Pair Combo on " + op.targetPlayer);
+               }
+
+               else: {
                    if: (op.targetPlayer == myUserId) then: {
-                       system.println("[PAIR] On me vole une carte index " + op.stealIndex);
+                       system.println("[PAIR] stolen index " + op.stealIndex);
                        def myHand := gameModel.getHand(myUserId);
                        if: ((myHand != nil).and: { myHand.length > 0 }) then: {
                            def idx := (op.stealIndex - 1) % myHand.length;
                            def stolenCard := myHand[idx + 1];
-                           localInterface.showMessage("On vous a volé : " + stolenCard.type);
+                           localInterface.showMessage("Card stolen " + stolenCard.type);
                            def giveOp := Operations.makeGiveCardOp(myUserId, currentSessionId, op.fromId, stolenCard);
                            performTwoPhaseCommit(giveOp);
                        };
-                   } else: {
-                       localInterface.showMessage(op.fromId + " vole une carte à " + op.targetPlayer);
+                   }
+                   else: {
+                       localInterface.showMessage(op.fromId + " steal a card from " + op.targetPlayer);
                    };
                };
            };
@@ -614,34 +656,37 @@ def makeAmbientKittens() {
                if: (op.fromId != myUserId) then: { gui.playCardOpponent(op.card.type, op.card.variant); };
                if: (op.fromId == myUserId) then: {
                    updateJavaHand(myUserId);
-                   log("Demande de " + op.reqType + " envoyée à " + op.targetPlayer);
-               } else: {
+                   log("Request of " + op.reqType + " card sent to " + op.targetPlayer);
+               }
+
+               else: {
                    if: (op.targetPlayer == myUserId) then: {
-                       system.println("[TRIPLE] On me demande : " + op.reqType + " / " + op.reqVariant);
+                       system.println("[TRIPLE] requested card: " + op.reqType + " / " + op.reqVariant);
                        def myHand := gameModel.getHand(myUserId);
                        def foundCard := nil;
                        if: (myHand != nil) then: {
-                           myHand.each: { |c|
+                           myHand.each: { |card|
                                if: (foundCard == nil) then: {
-                                   def cType := c.type + "";
-                                   def cVar := c.variant + "";
-                                   def rType := op.reqType + "";
-                                   def rVar := op.reqVariant + "";
-                                   if: (cType == rType) then: {
-                                       if: (cVar == rVar) then: { foundCard := c; };
+                                   def cardType := card.type + "";
+                                   def cardVar := card.variant + "";
+                                   def requestedType := op.reqType + "";
+                                   def requestedVar := op.reqVariant + "";
+                                   if: (cardType == requestedType) then: {
+                                       if: (cardVar == requestedVar) then: { foundCard := card; };
                                    };
                                };
                            };
                        };
                        if: (foundCard != nil) then: {
-                           log("Zut ! J'ai la carte " + foundCard.type + ". Je dois la donner.");
+                           log("Card found: " + foundCard.type);
                            def giveOp := Operations.makeGiveCardOp(myUserId, currentSessionId, op.fromId, foundCard);
                            performTwoPhaseCommit(giveOp);
-                       } else: {
-                           log("Ouf ! Je n'ai pas la carte demandée (" + op.reqType + ").");
+                       }
+                       else: {
+                           log("Don't have this card: " + op.reqType);
                        };
                    } else: {
-                       log(op.fromId + " demande une carte précise à " + op.targetPlayer);
+                       log(op.fromId + "request a sepcific card " + op.targetPlayer);
                    };
                };
            };
@@ -649,29 +694,34 @@ def makeAmbientKittens() {
            if: (op.type == "PLAY_SPECIAL_5") then: {
                def status := "UNKNOWN";
                def pile := [];
-               try: { if: (res.length == 2) then: { status := res[1]; pile := res[2]; }; } catch: { |e| };
+               try: { if: (res.length == 2) then: { status := res[1]; pile := res[2]; }; }
+                    catch: { |e| };
+
                if: ((status == "COMBO_5_OK").and: { pile.length >= 5 }) then: {
                    def len := pile.length;
                    (len - 4).to: len do: { |i|
-                       def c := pile[i];
-                       gui.playCardOpponent(c.type, c.variant);
+                       def card := pile[i];
+                       gui.playCardOpponent(card.type, card.variant);
                    };
                };
+
                if: (op.fromId == myUserId) then: {
                    updateJavaHand(myUserId);
                    if: (status == "COMBO_5_OK") then: {
                        def typesList := jlobby.java.util.ArrayList.new();
                        def varsList := jlobby.java.util.ArrayList.new();
-                       pile.each: { |c| typesList.add(c.type); varsList.add(c.variant); };
+                       pile.each: { |card| typesList.add(card.type); varsList.add(card.variant); };
                        gui.askPickFromDiscard(typesList, varsList);
                    };
-               } else: {
+               }
+
+               else: {
                    localInterface.showMessage(op.fromId + " joue le COMBO 5 CARTES !");
                };
            };
 
            if: (op.type == "TAKE_DISCARD") then: {
-               localInterface.showMessage(op.fromId + " a récupéré une carte de la défausse.");
+               localInterface.showMessage(op.fromId + " chose a card from the discard pile");
                if: (op.fromId == myUserId) then: { updateJavaHand(myUserId); };
            };
 
@@ -679,29 +729,14 @@ def makeAmbientKittens() {
        };
    };
 
-   def getRelativeIndex(targetId) {
-        def myIndex := -1;
-        def targetIndex := -1;
-        def count := sessionPlayerIds.length;
-        def i := 0;
-        sessionPlayerIds.each: { |pid|
-            if: (pid == myUserId) then: { myIndex := i; };
-            if: (pid == targetId) then: { targetIndex := i; };
-            i := i + 1;
-        };
-        def relative := (targetIndex - myIndex + count) % count;
-        if: (count == 2) then: { if: (relative == 1) then: { relative := 2; }; };
-        relative;
-   };
-
    def markDeadOpponent(deadId) {
         def myIndex := -1;
         def oppIndex := -1;
         def count := sessionPlayerIds.length;
         def i := 0;
-        sessionPlayerIds.each: { |pid|
-            if: (pid == myUserId) then: { myIndex := i; };
-            if: (pid == deadId) then: { oppIndex := i; };
+        sessionPlayerIds.each: { |playerId|
+            if: (playerId == myUserId) then: { myIndex := i; };
+            if: (playerId == deadId) then: { oppIndex := i; };
             i := i + 1;
         };
         def relative := (oppIndex - myIndex + count) % count;
@@ -709,6 +744,7 @@ def makeAmbientKittens() {
         system.println("[GUI] Marking DEAD oppId: " + deadId + " at relative pos: " + relative);
         gui.markOpponentDead(relative);
    };
+
 
   def remoteInterface := object: {
     def getUserId() { myUserId; };
@@ -718,11 +754,11 @@ def makeAmbientKittens() {
         checkLobbyStatus();
     };
 
-    def inviteToSession(sessionId, initiatorId, config, pList) {
+    def inviteToSession(sessionId, initiatorId, config, playerList) {
         if: (myState == LOBBY) then: {
             myState := PLAYING;
             currentSessionId := sessionId;
-            sessionPlayerIds := pList;
+            sessionPlayerIds := playerList;
             gameModel := makeGameRules(sessionPlayerIds);
             gameModel.initGame(config);
             opHistory := [];
@@ -754,7 +790,7 @@ def makeAmbientKittens() {
         if: (gameModel != nil) then: {
             gameModel.validateMove(op);
         } else: {
-            system.println("[WARN] Reçu 'prepare' alors que je suis parti. Vote FALSE.");
+            system.println("[WARN] received prepare but the player left ! Vote FALSE.");
             false;
         };
     };
@@ -763,7 +799,7 @@ def makeAmbientKittens() {
         if: (gameModel != nil) then: {
             commitLocally(op);
         } else: {
-            system.println("[WARN] Reçu 'commit' alors que je suis parti. Ignoré.");
+            system.println("[WARN] received commit but the player left !. Ignored.");
         };
     };
   };
@@ -775,7 +811,7 @@ def makeAmbientKittens() {
       if: (myState == PLAYING) then: {
           def op := Operations.makePlayerLeftOp(crashedId, currentSessionId);
           commitLocally(op);
-          localInterface.showMessage("Joueur " + crashedId + " exclu (Timeout).");
+          localInterface.showMessage("Player " + crashedId + " kicked (Timeout).");
       };
   };
 
@@ -789,6 +825,7 @@ def makeAmbientKittens() {
                  log("Player " + id + " recovered before timeout!");
                  pendingDisconnects.remove(id);
              };
+
              if: (!(playersById.containsKey(id))) then: {
                  if: (id != myUserId) then: {
                      log("New player detected: " + id);
