@@ -11,7 +11,7 @@ import /.at.support.timer exclude seconds, minutes, millisec;
 enableFutures(false);
 
 deftype Player;
-// --- CONFIGURATION ---
+// CONFIGURATION var:
 def LOBBY := 0;
 def PLAYING := 1;
 def DELAY_START_SESSION := 5.seconds;
@@ -30,7 +30,6 @@ def WeKittensApp := jlobby.weKittens.WeKittensApp;
 def makeAmbientKittens() {
   def gui;
 
-  // --- ETAT ---
   def myState := LOBBY;
   def currentSessionId := nil;
   def myUserId := UUID.randomUUID().toString();
@@ -455,7 +454,7 @@ def makeAmbientKittens() {
           } else: {
               if: ((op.type == "PLAYER_LEFT").and: { op.fromId == myUserId }) then: {
                   localValid := true;
-                  system.println("[2PC] Override: Validation forcée du Leave (GameModel nil)");
+                  system.println("[2PC] Override: LEAVE (GameModel nil)");
               };
           };
 
@@ -747,6 +746,28 @@ def makeAmbientKittens() {
 
 
   def remoteInterface := object: {
+
+    def getSyncStatus() {
+        def currentUuid := lastOpUuid;
+        def currentId := myUserId;
+
+         isolate: {
+             def id := currentId;
+             def lastOpUuid := currentUuid;
+         };
+    };
+
+    def receiveSync(missingOps) {
+        log("SYNC: Receiving " + missingOps.length + " missed operations.");
+        missingOps.each: { |op|
+            // make sure the op is unknown:
+            if: (lastOpUuid != op.uuid) then: {
+                commitLocally(op);
+            };
+        };
+        localInterface.showMessage("Reconnection Sync Complete.");
+    };
+
     def getUserId() { myUserId; };
     def updatePlayerState(id, state) {
         log("UPDATE: Player " + id + " state -> " + state);
@@ -820,50 +841,62 @@ def makeAmbientKittens() {
   def goOnline() {
     pub := export: remoteInterface as: Player;
     sub := whenever: Player discovered: { |player|
-         when: player<-getUserId()@FutureMessage becomes: { |id|
-             if: (pendingDisconnects.containsKey(id)) then: {
-                 log("Player " + id + " recovered before timeout!");
-                 pendingDisconnects.remove(id);
-             };
 
-             if: (!(playersById.containsKey(id))) then: {
-                 if: (id != myUserId) then: {
-                     log("New player detected: " + id);
-                     playersById.put(id, player);
-                     if: (!playerStates.containsKey(id)) then: { playerStates.put(id, LOBBY); };
-                     playerIdsList := playerIdsList + [id];
-                     player<-updatePlayerState(myUserId, myState);
-                     checkLobbyStatus();
+      when: player<-getSyncStatus()@FutureMessage becomes: { |status|
+        def id := status.id;
+        def hisLastOpUuid := status.lastOpUuid;
 
-                     if: ((myState == PLAYING).and: { sessionPlayerIds.contains(id) }) then: {
-                         log("Player rejoined session. Requesting Sync...");
-                         when: player<-fetchOpsSince(lastOpUuid)@FutureMessage becomes: { |ops|
-                             if: (ops.length > 0) then: {
-                                 log("Catching up " + ops.length + " operations...");
-                                 ops.each: { |missedOp|
-                                     if: (lastOpUuid != missedOp.uuid) then: { commitLocally(missedOp); };
-                                 };
-                                 localInterface.showMessage("Sync complete (" + ops.length + " ops).");
-                             };
-                         };
-                     };
 
-                     whenever: player disconnected: {
-                         log("WARNING: Player " + id + " connection lost. Starting timer...");
-                         pendingDisconnects.put(id, true);
-                         when: CRASH_TIMEOUT elapsed: {
-                             if: (pendingDisconnects.containsKey(id)) then: {
-                                 log("CRASH CONFIRMED: Player " + id + " is gone for good.");
-                                 pendingDisconnects.remove(id);
-                                 forceKickPlayer(id);
-                             } else: {
-                                 log("Timer elapsed but player " + id + " had reconnected.");
-                             };
-                         };
-                     };
-                 };
-             };
-         };
+        if: (pendingDisconnects.containsKey(id)) then: {
+          log("Player " + id + " recovered before timeout!");
+          pendingDisconnects.remove(id);
+        };
+
+
+        if: (!(playersById.containsKey(id))) then: {
+          if: (id != myUserId) then: {
+            log("New player/Reconnect detected: " + id);
+            playersById.put(id, player);
+
+            if: (!playerStates.containsKey(id)) then: { playerStates.put(id, LOBBY); };
+            playerIdsList := playerIdsList + [id];
+
+
+            player<-updatePlayerState(myUserId, myState);
+            checkLobbyStatus();
+
+            // SYUNC OP
+            if: ((myState == PLAYING).and: { sessionPlayerIds.contains(id) }) then: {
+              log("Player " + id + " rejoined session. Pushing ops since: " + hisLastOpUuid);
+
+
+              def missingOps := fetchOpsSince(hisLastOpUuid);
+
+              if: (missingOps.length > 0) then: {
+                log("Sending " + missingOps.length + " missed operations to " + id);
+                player<-receiveSync(missingOps);
+              } else: {
+                log("Player " + id + " is already up to date.");
+              };
+            };
+
+
+            whenever: player disconnected: {
+              log("WARNING: Player " + id + " connection lost. Starting timer...");
+              pendingDisconnects.put(id, true);
+              when: CRASH_TIMEOUT elapsed: {
+                if: (pendingDisconnects.containsKey(id)) then: {
+                  log("CRASH CONFIRMED: Player " + id + " is gone for good.");
+                  pendingDisconnects.remove(id);
+                  forceKickPlayer(id);
+                } else: {
+                  log("Timer elapsed but player " + id + " had reconnected.");
+                };
+              };
+            };
+          };
+        };
+      };
     };
   };
   def goOffline(){ pub.cancel(); sub.cancel(); };

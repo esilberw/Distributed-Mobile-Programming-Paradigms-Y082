@@ -2,34 +2,26 @@ package weKittens.interfaces;
 import weKittens.Card;
 
 public interface ATLocalInterface {
-    // Jouer une carte simple (avec cible optionnelle pour Favor)
+    // play single card with optional target info for Favor:
     boolean cardPlayed(Card card, int targetInfo);
 
-
     // targetInfo : 1=Left, 2=Top, 3=Right
-    // stealIndex : Le numéro choisi par le joueur (1..N)
+    // stealIndex : idx oppennentHand chosen by player
     boolean pairPlayed(Card card, int targetInfo, int stealIndex);
 
-    // NOUVEAU : Demander combien de cartes a l'adversaire (pour borner le choix)
+    // to bound the choice to steal a card
     int getOpponentHandSize(int targetInfo);
 
-    // reqType : Le type de carte demandé (ex: "defuse")
-    // reqVariant : La variante demandée (ex: "catnip")
     boolean triplePlayed(Card card, int targetInfo, String reqType, String reqVariant);
 
-    // NOUVEAU : Jouer le combo 5 cartes différentes
     boolean special5ComboPlayed();
 
-    // NOUVEAU : Récupérer une carte de la défausse (suite au combo)
     boolean pickFromDiscard(String type, String variant);
 
-    // NOUVEAU : Jouer un NOPE (Interruption)
     boolean nopePlayed(Card card);
 
-    // [RENOMME] Quitter le mode spectateur (Retour Lobby sans impact jeu)
     void leaveSpectatingMode();
 
-    // [RENOMME] Quitter la session active (Abandonner la partie)
     void leaveSession();
 
     boolean playerDrewCard();

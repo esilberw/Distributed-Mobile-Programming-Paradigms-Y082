@@ -29,7 +29,6 @@ public class Deck {
     }
 
     public Card takeCard(Card.CardType type) {
-        // assumes the card exists...
         int pos = 0;
         Card card;
 
@@ -51,7 +50,7 @@ public class Deck {
             addCard(deck, card, variant, count);
     }
 
-        // deck without exploding kittens
+    // deck without exploding kittens
     private void makeSharingDeck() {
         LinkedList<Card> deck = new LinkedList<>();
         //Nope
@@ -99,7 +98,7 @@ public class Deck {
 
     public void addExplodingKittens() {
         int explodingCount = 0;
-        System.out.println("NOMBRE DE EXPLODING KITTEN:" +  (playerCount  -1));
+        System.out.println("Number of EXPLODING KITTEN:" +  (playerCount  -1));
 
         for (int i=0; i<2; i++) {
             addCard(this.cards, Card.CardType.exploding, "a", 1, explodingCount++, playerCount - 1);

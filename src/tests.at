@@ -1,8 +1,3 @@
-/**
- * tests.at
- * Tests unitaires pour la logique distribuée de WeKittens.
- */
-
 import /.at.lang.futures;
 import /.at.lang.multifutures;
 import /.at.support.timer exclude seconds, minutes, millisec;
@@ -11,12 +6,11 @@ import /.at.unit.test;
 deftype Player;
 def UUID := jlobby.java.util.UUID;
 
-def createMockPlayer(name) {
+def createPlayerModel(name) {
     def myGeneratedId := UUID.randomUUID().toString();
     def PlayerType := Player;
 
     actor: {
-        // --- ETAT LOCAL ---
         def LOBBY := 0;
         def PLAYING := 1;
 
@@ -28,12 +22,12 @@ def createMockPlayer(name) {
 
         def pub := nil;
 
-        // Structures de données Java
+
         def knownPlayers := jlobby.java.util.HashMap.new();
         def opHistory := jlobby.java.util.ArrayList.new();
         def lastOpUuid := "GENESIS";
 
-        // --- INTERFACE RESEAU ---
+
         def remoteInterface := object: {
             def getUserId() { myUserId; };
 
@@ -74,7 +68,7 @@ def createMockPlayer(name) {
                 };
             };
 
-            // CORRECTION: IDEMPOTENCE (Vérifier si on a déjà l'op pour éviter les doublons)
+
             def receiveSync(ops) {
                 system.println("[" + myName + "] SYNC RECU: " + ops.length + " operations.");
                 ops.each: { |op|
@@ -87,7 +81,7 @@ def createMockPlayer(name) {
 
                     if: !exists then: {
                         opHistory.add(op);
-                        // On met à jour le pointeur vers le dernier reçu
+
                         lastOpUuid := op.uuid;
                     };
                 };
@@ -109,7 +103,7 @@ def createMockPlayer(name) {
             };
         };
 
-        // --- METHODES PUBLIQUES ---
+
         def goOnline() {
             pub := export: remoteInterface as: PlayerType;
             whenever: PlayerType discovered: { |p|
@@ -123,23 +117,23 @@ def createMockPlayer(name) {
 
         def startSessionWith(opponents) {
             sessionCounter := sessionCounter + 1;
-            def newSessionId := myUserId + "-SESS-" + sessionCounter;
+            def newSessionId := myUserId + " SESSION " + sessionCounter;
 
             opponents.each: { |opp|
                 opp<-inviteToSession(newSessionId, myUserId, nil, [myUserId]);
             };
 
-            // Auto-invite pour initialiser l'état local
+            // auto-invitation to lunch:
             remoteInterface.inviteToSession(newSessionId, myUserId, nil, []);
             newSessionId;
         };
 
-        def inviteToSession(sid, initId, conf, plist) {
-            remoteInterface.inviteToSession(sid, initId, conf, plist);
+        def inviteToSession(sessionId, initId, conf, playersList) {
+            remoteInterface.inviteToSession(sessionId, initId, conf, playersList);
         };
 
         def simulateOp(payload) {
-            def opId := myUserId + "-OP-" + (opHistory.size() + 1);
+            def opId := myUserId + "OP" + (opHistory.size() + 1);
             def op := isolate: {
                 def uuid := opId;
                 def data := payload;
@@ -177,13 +171,13 @@ def DistributedTest := extend: /.at.unit.test.UnitTest.new("WeKittens Distribute
 
     def testSessionCreation() {
         def [fut, res] := makeFuture();
-        def p1 := createMockPlayer("Alice");
-        def p2 := createMockPlayer("Bob");
+        def p1 := createPlayerModel("Alice");
+        def p2 := createPlayerModel("Bob");
         actors := [p1, p2];
         p1<-goOnline(); p2<-goOnline();
 
         when: 2.seconds elapsed: {
-            when: p1<-startSessionWith([p2])@FutureMessage becomes: { |sid|
+            when: p1<-startSessionWith([p2])@FutureMessage becomes: { |sessionId|
                 when: 1.seconds elapsed: {
                     def f1 := p1<-getSessionId()@FutureMessage;
                     def f2 := p2<-getSessionId()@FutureMessage;
@@ -199,9 +193,9 @@ def DistributedTest := extend: /.at.unit.test.UnitTest.new("WeKittens Distribute
 
     def testReconnection() {
         def [fut, res] := makeFuture();
-        system.println("--- TEST SMR RECONNECTION ---");
-        def alice := createMockPlayer("Alice_SMR");
-        def bob := createMockPlayer("Bob_SMR");
+        system.println("TEST SMR RECONNECTION");
+        def alice := createPlayerModel("Alice_SMR");
+        def bob := createPlayerModel("Bob_SMR");
         actors := [alice, bob];
         alice<-goOnline(); bob<-goOnline();
 
@@ -209,14 +203,14 @@ def DistributedTest := extend: /.at.unit.test.UnitTest.new("WeKittens Distribute
             alice<-startSessionWith([bob]);
 
             when: 1.seconds elapsed: {
-                alice<-simulateOp("Coup 1");
+                alice<-simulateOp("op 1");
 
                 when: 1.seconds elapsed: {
                     system.println("Bob goes OFFLINE");
                     bob<-goOffline();
 
                     when: 1.seconds elapsed: {
-                        alice<-simulateOp("Coup 2");
+                        alice<-simulateOp("op 2");
 
                         when: 1.seconds elapsed: {
                             system.println("Bob goes ONLINE");
@@ -225,7 +219,7 @@ def DistributedTest := extend: /.at.unit.test.UnitTest.new("WeKittens Distribute
                             when: 3.seconds elapsed: {
                                 when: bob<-getOpHistory()@FutureMessage becomes: { |hist|
                                     system.println("Bob History size: " + hist.length);
-                                    // Bob devrait avoir [Coup 1 (avant deco), Coup 2 (sync)]
+                                    // Bob should have [op 1 (before deco), op 2 (sync)]
                                     self.assertEquals(2, hist.length, "Bob should have synced 2 ops");
                                     res.resolve(true);
                                 };
@@ -239,9 +233,10 @@ def DistributedTest := extend: /.at.unit.test.UnitTest.new("WeKittens Distribute
     };
 
     def testDiscoveryCount() {
+         system.println("TEST SMR DISCOVERY");
          def [fut, res] := makeFuture();
-         def p1 := createMockPlayer("Host");
-         def p2 := createMockPlayer("Guest1");
+         def p1 := createPlayerModel("Host");
+         def p2 := createPlayerModel("Guest1");
          actors := [p1, p2];
          p1<-goOnline(); p2<-goOnline();
          when: 2.seconds elapsed: {

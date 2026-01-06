@@ -3,12 +3,12 @@ def Deck := jlobby.weKittens.Deck;
 def CardType := jlobby.weKittens.Card.CardType;
 
 object: {
-  // --- IMPORTS ISOLES ---
+
   def Data := object: { import ~.data; };
   def Collections := object: { import /.at.collections.java.hashmap; };
 
   def makeGameRules(playerIds) {
-    // --- ETAT DU JEU (State) ---
+    // State game:
     def deck := [];
     def hands := Collections.HashMap.new();
     def activePlayers := playerIds;
@@ -20,7 +20,7 @@ object: {
     def deadPlayers := [];
     def discardPile := [];
 
-    // --- ETAT NOPE (Undo/Redo) ---
+    // For nope logic
     def lastState := nil;
     def lastOp := nil;
     def nopeCount := 0;
@@ -28,9 +28,7 @@ object: {
     def localAtCard := Data.atCard;
 
     isolate: {
-        // =================================================================
-        // 1. INITIALISATION
-        // =================================================================
+        // Initialization of the initial common game state
         def createInitialState() {
             system.println("[RULES] Generation via Deck.java...");
             def jDeck := Deck.new(activePlayers.length);
@@ -42,8 +40,8 @@ object: {
                 def jDefuse := jDeck.takeCard(CardType.defuse);
                 if: (jDefuse != nil) then: { hand := hand + [Data.atCardFromJCard(jDefuse)]; };
 
-                // + 7 cartes au hasard
-                1.to: 7 do: { |i|
+                // + 7 radom card:
+                1.to: 8 do: { |i|
                     def jCard := jDeck.drawCard();
                     if: !(jCard == nil) then: { hand := hand + [Data.atCardFromJCard(jCard)]; };
                 };
@@ -54,19 +52,20 @@ object: {
 
             // Conversion Deck Java -> AT
             def finalDeck := [];
-            def pulling := true;
-            while: { pulling } do: {
-                def c := jDeck.drawCard();
-                if: (c == nil) then: { pulling := false; } else: {
-                    finalDeck := finalDeck + [Data.atCardFromJCard(c)];
+            def hasCards := true;
+            while: { hasCards } do: {
+                def card := jDeck.drawCard();
+                if: (card == nil) then: { hasCards := false; } else: {
+                    finalDeck := finalDeck + [Data.atCardFromJCard(card)];
                 };
             };
 
-            // Préparation données sérialisables
+
+            // makes this serializable
             def serializableHands := [];
-            activePlayers.each: { |pid|
-                def h := initialHands.get(pid);
-                serializableHands := serializableHands + [[pid, h]];
+            activePlayers.each: { |playerId|
+                def hand := initialHands.get(playerId);
+                serializableHands := serializableHands + [[playerId, hand]];
             };
 
             isolate: {
@@ -77,9 +76,9 @@ object: {
 
         def initGame(config) {
             deck := config.syncedDeck;
-            hands := Collections.HashMap.new();
+            hands := Collections.HashMap.new(); // Keep a local track of all hands of eache player.
             config.syncedHandsData.each: { |entry|
-                hands.put(entry[1], entry[2]);
+                hands.put(entry[1], entry[2]); // [playerID , hand]
             };
 
             activePlayers := playerIds;
@@ -94,54 +93,60 @@ object: {
             system.println("[RULES] GAME INIT COMPLETE.");
         };
 
-        // =================================================================
-        // 2. ACCESSEURS (Getters)
-        // =================================================================
+
+        // ACCESSORS
         def getCurrentPlayer() {
             if: (activePlayers.isEmpty()) then: { nil } else: { activePlayers[currentPlayerIndex + 1] };
         };
+
         def getTurnsLeft() { turnsToTake; };
         def getDeckSize() { deck.length; };
         def getHand(pid) { hands.get(pid); };
-        def getDiscardTop() {
+
+        def getDiscardTop() { // to maintain consistent GUI
             if: (discardPile.isEmpty()) then: { nil } else: { discardPile[discardPile.length] };
         };
-        def isNoped() { (nopeCount % 2) != 0; };
 
-        // =================================================================
-        // 3. LOGIQUE VALIDATION (Rules Checking)
-        // =================================================================
+        def isNoped() { (nopeCount % 2) != 0; }; // odd -> noped, even -> yup
+
+
+        // Rules Checking:
         def validateMove(op) {
-            def pid := op.fromId;
+            def playerId := op.fromId;
             def isValid := true;
 
-            // Règle 0: Les morts ne jouent pas
-            if: (deadPlayers.contains(pid)) then: { isValid := false; };
+            // DeadPlayers cannot play:
+            if: (deadPlayers.contains(playerId)) then: { isValid := false; };
 
             if: isValid then: {
-                // Règle 1: C'est mon tour ? (Sauf pour Nope)
+                // Turn logic management except for nope card:
                 def isTurnBased := ["PLAY_CARD", "DRAW_CARD", "PLAY_PAIR", "PLAY_TRIPLE", "PLAY_SPECIAL_5"].contains(op.type);
                 if: (isTurnBased) then: {
                     def isNopeCard := false;
-                    if: (op.type == "PLAY_CARD") then: { if: (op.card.type == "nope") then: { isNopeCard := true; }; };
+                    if: (op.type == "PLAY_CARD") then: {
+                        if: (op.card.type == "nope") then: {
+                            isNopeCard := true; };
+                        };
 
                     if: !isNopeCard then: {
-                        if: (pid != getCurrentPlayer()) then: { isValid := false; };
+                        if: (playerId != getCurrentPlayer()) then: {
+                            isValid := false;
+                        };
                     };
                 };
             };
 
             if: isValid then: {
-                // Règle 2: A-t-on les cartes nécessaires ?
-                if: (op.type == "PLAY_CARD") then: { isValid := checkHasCards(pid, op.card, 1); };
-                if: (op.type == "PLAY_PAIR") then: { isValid := checkHasCards(pid, op.card, 2); };
-                if: (op.type == "PLAY_TRIPLE") then: { isValid := checkHasCards(pid, op.card, 3); };
-                if: (op.type == "PLAY_SPECIAL_5") then: { isValid := checkHas5Diff(pid); };
+                // Check if we have the played cards  (check consistency for me and others)
+                if: (op.type == "PLAY_CARD") then: { isValid := checkHasCards(playerId, op.card, 1); };
+                if: (op.type == "PLAY_PAIR") then: { isValid := checkHasCards(playerId, op.card, 2); };
+                if: (op.type == "PLAY_TRIPLE") then: { isValid := checkHasCards(playerId, op.card, 3); };
+                if: (op.type == "PLAY_SPECIAL_5") then: { isValid := checkHas5Diff(playerId); };
 
                 if: (op.type == "TAKE_DISCARD") then: {
                     def found := false;
-                    discardPile.each: { |c|
-                        if: ((c.type == op.card.type).and: {c.variant == op.card.variant}) then: { found := true; };
+                    discardPile.each: { |card|
+                        if: ((card.type == op.card.type).and: {card.variant == op.card.variant}) then: { found := true; };
                     };
                     isValid := found;
                 };
@@ -151,47 +156,56 @@ object: {
         };
 
         // Helpers Validation
-        def checkHasCards(pid, template, qty) {
-            def h := getHand(pid);
+        def checkHasCards(playerId, templateCard, quantity) {
+            def hand := getHand(playerId);
             def count := 0;
-            h.each: { |c|
-                if: ((c.type == template.type).and: {
-                    (template.type == "cat").ifTrue: { c.variant == template.variant } ifFalse: { true }
-                }) then: { count := count + 1; };
+
+            hand.each: { |card|
+                if: (card.type == templateCard.type) then: {
+
+                    // Check if it's not a "cat" Card +(OR) vairant in the case of a "cat" Card
+                    if: ((templateCard.type != "cat").or: { card.variant == templateCard.variant }) then: {
+                        count := count + 1;
+                    };
+                };
             };
-            (count >= qty);
+            (count >= quantity);
         };
 
-        def checkHas5Diff(pid) {
-            def h := getHand(pid);
+        def checkHas5Diff(playerId) {
+            def hand := getHand(playerId);
             def uniqueKeys := [];
-            h.each: { |c|
-                def key := c.type;
-                if: (c.type == "cat") then: { key := c.type + c.variant; };
-                if: !(uniqueKeys.contains(key)) then: { uniqueKeys := uniqueKeys + [key]; };
+            hand.each: { |card|
+                def key := card.type;
+                if: (card.type == "cat") then: {
+                    key := card.type + card.variant;
+                    };
+
+                if: !(uniqueKeys.contains(key)) then: {
+                    uniqueKeys := uniqueKeys + [key];
+                    };
             };
             (uniqueKeys.length >= 5);
         };
 
-        // =================================================================
-        // 4. MOTEUR D'EXECUTION (Logic Dispatcher)
-        // =================================================================
+
+        // Handle nope + call the logic dispatcher:
         def applyMove(op) {
             def oldDeckSize := deck.length;
             def type := op.type;
-            def pid := op.fromId;
+            def playerId := op.fromId;
             def finalResult := "OK";
 
-            // --- CAS SPECIAL : NOPE (Undo/Redo System) ---
+            // SPECIAL CASE : NOPE
             if: (type == "PLAY_NOPE") then: {
-                system.println("[NOPE] Joué par " + pid);
-                consumeCards(pid, [op.card]);
+                system.println("[NOPE] played by " + playerId);
+                consumeCards(playerId, [op.card]);
 
                 if: (lastState != nil) then: {
                     nopeCount := nopeCount + 1;
                     if: (isNoped()) then: {
                         cancelLastAction();
-                        finalResult := "ACTION_CANCELLED";
+                        finalResult := "ACTION_CANCELED";
                     } else: {
                         redoLastAction();
                         finalResult := "ACTION_RESTORED";
@@ -201,33 +215,35 @@ object: {
                     finalResult := "NOPE_PREEMPTIVE";
                 };
             } else: {
-                // --- EST-CE UNE ACTION BLOQUABLE ? ---
+                // CHeck if it is a blockable action:
                 def isBlockable := (["PLAY_CARD","PLAY_PAIR","PLAY_TRIPLE","PLAY_SPECIAL_5"].contains(type));
 
                 if: (isBlockable) then: {
                     if: (isNoped().and: {lastState != nil}) then: {
-                         nopeCount := 0; lastState := nil; lastOp := nil;
+                         nopeCount := 0; lastState := nil; lastOp := nil; // we block
                     };
 
                     if: (isNoped()) then: {
-                         system.println("[NOPE] Action bloquée préventivement.");
+                         system.println("[NOPE] Action blocked preventively");
                          consumeCardsForOp(op);
                          nopeCount := 0;
                          finalResult := "BLOCKED_BY_NOPE";
-                    } else: {
+                    }
+                    else: {
                         lastState := captureState();
                         lastOp := op;
                         nopeCount := 0;
                         consumeCardsForOp(op);
                         finalResult := executeOpLogic(op);
                     };
-                } else: {
-                    // --- ACTIONS NON BLOQUABLES / NETTOYAGE ---
+                }
+                else: {
+                    // UnBlockable acitons:
                     if: (["DRAW_CARD", "DEFUSE_KITTEN", "TAKE_DISCARD"].contains(type)) then: {
                         lastState := nil; lastOp := nil; nopeCount := 0;
                         finalResult := executeOpLogic(op);
                     } else: {
-                        // Autres (GIVE_CARD, PLAYER_LEFT)
+                        // last actions: (GIVE_CARD, PLAYER_LEFT)
                         finalResult := executeOpLogic(op);
                     };
                 };
@@ -237,49 +253,58 @@ object: {
             finalResult;
         };
 
-        // --- DISPATCHER LOGIQUE ---
+        // LOGIC DISPATCHER
         def executeOpLogic(op) {
-            def t := op.type;
+            def opType := op.type;
             def res := "OK";
 
-            if: (t == "PLAY_CARD") then: { res := doPlaySingle(op); };
-            if: (t == "PLAY_PAIR") then: { res := "PAIR_OK"; };
-            if: (t == "PLAY_TRIPLE") then: { res := "TRIPLE_OK"; };
-            if: (t == "PLAY_SPECIAL_5") then: { res := ["COMBO_5_OK", discardPile]; };
-            if: (t == "DRAW_CARD") then: { res := doDrawCard(op); };
-            if: (t == "DEFUSE_KITTEN") then: { res := doDefuse(op); };
-            if: (t == "TAKE_DISCARD") then: { res := doTakeDiscard(op); };
-            if: (t == "GIVE_CARD") then: { res := doGiveCard(op); };
-            if: (t == "PLAYER_LEFT") then: { res := doPlayerLeft(op); };
+            if: (opType == "PLAY_CARD") then: { res := doPlaySingle(op); };
+            if: (opType == "PLAY_PAIR") then: { res := "PAIR_OK"; };
+            if: (opType == "PLAY_TRIPLE") then: { res := "TRIPLE_OK"; };
+            if: (opType == "PLAY_SPECIAL_5") then: { res := ["COMBO_5_OK", discardPile]; };
+            if: (opType == "DRAW_CARD") then: { res := doDrawCard(op); };
+            if: (opType == "DEFUSE_KITTEN") then: { res := doDefuse(op); };
+            if: (opType == "TAKE_DISCARD") then: { res := doTakeDiscard(op); };
+            if: (opType == "GIVE_CARD") then: { res := doGiveCard(op); };
+            if: (opType == "PLAYER_LEFT") then: { res := doPlayerLeft(op); };
 
             res;
         };
 
-        // =================================================================
-        // 5. IMPLEMENTATION DES EFFETS DE CARTES
-        // =================================================================
+
+        // Implementation of cards effects :
 
         def doPlaySingle(op) {
-            def cType := op.card.type;
+            def cardType := op.card.type;
             def res := "OK";
 
-            if: (cType == "attack") then: {
+            if: (cardType == "attack") then: {
                 def extra := 2;
-                if: (turnsToTake > 1) then: { extra := turnsToTake + 2; };
+                if: (turnsToTake > 1) then: {
+                    extra := turnsToTake + 2; // Logic of 2 -> 4 -> 6 if serveral attack cards in a row
+                };
+
                 nextTurnCount := extra;
                 passTurnNoDraw();
                 res := "ATTACK_OK";
             };
-            if: (cType == "skip") then: {
+
+            if: (cardType == "skip") then: {
                 turnsToTake := turnsToTake - 1;
-                if: (turnsToTake <= 0) then: { passTurnNoDraw(); };
+
+                if: (turnsToTake <= 0) then: {
+                    passTurnNoDraw();
+                    };
+
                 res := "SKIP_OK";
             };
-            if: (cType == "shuffle") then: {
+
+            if: (cardType == "shuffle") then: {
                 performShuffle(op.shuffleData);
                 res := "SHUFFLE_OK";
             };
-            if: (cType == "future") then: {
+
+            if: (cardType == "future") then: {
                 def peek := getTopCards(3);
                 res := ["PEEK_FUTURE", peek];
             };
@@ -290,13 +315,15 @@ object: {
         def doDrawCard(op) {
             def res := "DRAW_OK";
             if: (deck.isEmpty()) then: {
-                res := "EMPTY";
-            } else: {
-                // --- FIX DECK DECREASE BUG ---
+                res := "EMPTY"; // could have happened at the beginning of the project
+            }
+
+            else: {
+
                 def len := deck.length;
                 def card := deck[len];
 
-                // Reconstruction explicite avec boucle while pour être sûr
+                // explicit reconstruction of the deck after draw
                 def newDeck := [];
                 def idx := 1;
                 while: { idx < len } do: {
@@ -305,21 +332,25 @@ object: {
                 };
                 deck := newDeck;
 
-                // Sanity Check Debug
+                // Sanity check debug
                 if: (deck.length != (len - 1)) then: {
-                    system.println("[ERR] Deck size BUG! Was " + len + " became " + deck.length);
+                    system.println("[ERROR] Deck size BUG! Was " + len + " became " + deck.length);
                 };
 
                 if: (card.type == "exploding") then: {
                     def hand := getHand(op.fromId);
                     def hasDefuse := false;
-                    hand.each: { |c| if: (c.type == "defuse") then: { hasDefuse := true; }; };
+                    hand.each: { |hCard| if: (hCard.type == "defuse") then: {
+                        hasDefuse := true; };
+                        };
 
                     if: (hasDefuse) then: {
                         hands.put(op.fromId, hand + [card]);
                         res := ["MUST_DEFUSE", card];
-                    } else: {
-                        explosePlayer(op.fromId);
+                    }
+
+                    else: {
+                        explosePlayer(op.fromId); // automatic epxlosion:
                         if: (activePlayers.length == 1) then: { res := ["WINNER", card]; }
                         else: { res := ["DIED", card]; };
                     };
@@ -334,24 +365,23 @@ object: {
         };
 
         def doDefuse(op) {
-            def pid := op.fromId;
-            def hand := getHand(pid);
+            def playerId := op.fromId;
+            def hand := getHand( playerId);
 
             def defuseCard := nil;
             def kittenCard := nil;
 
-            // --- CORRECTION PARENTHESES ---
-            hand.each: { |c|
-                if: ((defuseCard == nil).and:{c.type == "defuse"}) then: { defuseCard := c; };
-                if: ((kittenCard == nil).and:{c.type == "exploding"}) then: { kittenCard := c; };
+            hand.each: { |card|
+                if: ((defuseCard == nil).and:{card.type == "defuse"}) then: { defuseCard := card; };
+                if: ((kittenCard == nil).and:{card.type == "exploding"}) then: { kittenCard := card; };
             };
 
             if: (defuseCard != nil) then: {
-                removeCardFromHand(pid, defuseCard);
+                removeCardFromHand(playerId, defuseCard);
                 discardPile := discardPile + [defuseCard];
             };
             if: (kittenCard != nil) then: {
-                removeCardFromHand(pid, kittenCard);
+                removeCardFromHand(playerId, kittenCard);
                 insertCardIntoDeck(kittenCard, op.insertIndex);
             };
 
@@ -362,20 +392,27 @@ object: {
         };
 
         def doTakeDiscard(op) {
-            def target := op.card;
+            def targetCard := op.card;
             def newDiscard := [];
             def found := false;
-            discardPile.each: { |c|
+            discardPile.each: { |discardCard|
                 if: !found then: {
-                    // --- CORRECTION PARENTHESES ---
-                    if: ((c.type == target.type).and: {c.variant == target.variant}) then: { found := true; }
-                    else: { newDiscard := newDiscard + [c]; };
-                } else: { newDiscard := newDiscard + [c]; };
+                    if: ((discardCard.type == targetCard.type).and: {discardCard.variant == targetCard.variant}) then: {
+                        found := true;
+                        }
+                    else: {
+                     newDiscard := newDiscard + [discardCard];
+                     };
+                } else: {
+                newDiscard := newDiscard + [discardCard];
+                };
             };
             discardPile := newDiscard;
 
-            def h := getHand(op.fromId);
-            if: (h != nil) then: { hands.put(op.fromId, h + [target]); };
+            def hand := getHand(op.fromId);
+            if: (hand != nil) then: {
+                hands.put(op.fromId, hand + [targetCard]);
+            };
 
             "RECOVERED";
         };
@@ -394,57 +431,60 @@ object: {
             if: (activePlayers.length == 1) then: { "WINNER" } else: { "DIED" };
         };
 
-        // =================================================================
-        // 6. UTILITAIRES DE GESTION DE CARTES
-        // =================================================================
 
         def consumeCardsForOp(op) {
-            def t := op.type;
-            def pid := op.fromId;
-            if: (t == "PLAY_CARD") then: { consumeCards(pid, [op.card]); };
-            if: (t == "PLAY_PAIR") then: { consumeCards(pid, [op.card, op.card]); };
-            if: (t == "PLAY_TRIPLE") then: { consumeCards(pid, [op.card, op.card, op.card]); };
-            if: (t == "PLAY_SPECIAL_5") then: {
-                def hand := getHand(pid);
+            def opType := op.type;
+            def playerId := op.fromId;
+            // same cards
+            if: (opType == "PLAY_CARD") then: { consumeCards(playerId, [op.card]); };
+            if: (opType == "PLAY_PAIR") then: { consumeCards(playerId, [op.card, op.card]); };
+            if: (opType == "PLAY_TRIPLE") then: { consumeCards(playerId, [op.card, op.card, op.card]); };
+
+            // 5 different cards to manage:
+            if: (opType == "PLAY_SPECIAL_5") then: {
+                def hand := getHand(playerId);
                 def uniqueKeys := [];
                 def toRemove := [];
-                hand.each: { |c|
-                    def key := c.type + (c.type == "cat").ifTrue:{c.variant}ifFalse:{""};
-                    if: (uniqueKeys.length < 5) then: {
-                        if: !(uniqueKeys.contains(key)) then: {
-                            uniqueKeys := uniqueKeys + [key];
-                            toRemove := toRemove + [c];
+
+                hand.each: { |card|
+                    def key := card.type;
+                    if: (card.type == "cat") then: {
+                        key := card.type + card.variant;
                         };
-                    };
+
+
+                    if: ((uniqueKeys.length < 5).and: { !(uniqueKeys.contains(key)) }) then: {
+                        uniqueKeys := uniqueKeys + [key];
+                        toRemove := toRemove + [card];
+                        };
                 };
-                consumeCards(pid, toRemove);
+                consumeCards(playerId, toRemove);
             };
         };
 
-        def consumeCards(pid, cards) {
-            cards.each: { |c|
-                removeCardFromHand(pid, c);
-                discardPile := discardPile + [c];
+        def consumeCards(playerId, cards) {
+            cards.each: { |card|
+                removeCardFromHand(playerId, card);
+                discardPile := discardPile + [card];
             };
         };
 
-        def removeCardFromHand(pid, cardTemplate) {
-            def hand := getHand(pid);
+        def removeCardFromHand(playerId, cardTemplate) {
+            def hand := getHand(playerId);
             def newHand := [];
-            def removed := false;
+            def foundAndRemoved := false;
             if: (hand != nil) then: {
                 hand.each: { |card|
                     def keep := true;
-                    if: !removed then: {
-                        // --- CORRECTION PARENTHESES ---
+                    if: !foundAndRemoved then: {
                         if: ((card.type == cardTemplate.type).and: {card.variant == cardTemplate.variant}) then: {
-                            removed := true;
+                            foundAndRemoved := true;
                             keep := false;
                         };
                     };
                     if: keep then: { newHand := newHand + [card]; };
                 };
-                hands.put(pid, newHand);
+                hands.put(playerId, newHand);
             };
         };
 
@@ -454,11 +494,18 @@ object: {
             if: (targetIndex < 1) then: { targetIndex := 1; };
             if: (targetIndex > (currentSize + 1)) then: { targetIndex := currentSize + 1; };
 
+            // Deck reconstruction:
             def newDeck := [];
             def i := 1;
-            while: { i < targetIndex } do: { newDeck := newDeck + [deck[i]]; i := i + 1; };
+            while: { i < targetIndex } do: {
+                newDeck := newDeck + [deck[i]]; i := i + 1;
+                };
+
             newDeck := newDeck + [card];
-            while: { i <= currentSize } do: { newDeck := newDeck + [deck[i]]; i := i + 1; };
+            while: { i <= currentSize } do: {
+                newDeck := newDeck + [deck[i]]; i := i + 1;
+                };
+
             deck := newDeck;
         };
 
@@ -483,8 +530,10 @@ object: {
             def peekCards := [];
             def i := deck.length;
             def limit := 1;
+
             if: (deck.length < count) then: { count := deck.length; };
             if: (count > 0) then: { limit := deck.length - count + 1; };
+
             while: { i >= limit } do: {
                 peekCards := peekCards + [deck[i]];
                 i := i - 1;
@@ -492,12 +541,10 @@ object: {
             peekCards;
         };
 
-        // =================================================================
-        // 7. GESTION D'ETAT (CAPTURE & RESTORE)
-        // =================================================================
+        // helpers for nope managament:
         def captureState() {
              def deckClone := [];
-             deck.each: { |c| deckClone := deckClone + [c]; };
+             deck.each: { |card| deckClone := deckClone + [card]; };
              isolate: {
                  def idx := currentPlayerIndex;
                  def turns := turnsToTake;
@@ -507,7 +554,7 @@ object: {
         };
 
         def cancelLastAction() {
-            if: (lastState != nil) then: {
+            if: (lastState != nil) then: { // replace all like before.
                 currentPlayerIndex := lastState.idx;
                 turnsToTake := lastState.turns;
                 nextTurnCount := lastState.next;
@@ -526,65 +573,74 @@ object: {
         };
 
         def restoreCardsToPlayer(op) {
-            def pid := op.fromId;
+            def playerId := op.fromId;
             def count := 0;
-            def t := op.type;
-            if: (t == "PLAY_CARD") then: { count := 1; };
-            if: (t == "PLAY_PAIR") then: { count := 2; };
-            if: (t == "PLAY_TRIPLE") then: { count := 3; };
-            if: (t == "PLAY_SPECIAL_5") then: { count := 5; };
+            def opType := op.type;
+            if: (opType == "PLAY_CARD") then: { count := 1; };
+            if: (opType == "PLAY_PAIR") then: { count := 2; };
+            if: (opType == "PLAY_TRIPLE") then: { count := 3; };
+            if: (opType == "PLAY_SPECIAL_5") then: { count := 5; };
 
             def cardsToReturn := [];
             1.to: count do: { |k|
-                def c := discardPile[discardPile.length];
-                if: (c != nil) then: {
-                    cardsToReturn := cardsToReturn + [c];
-                    def newD := [];
-                    1.to: (discardPile.length - 1) do: { |x| newD := newD + [discardPile[x]]; };
-                    discardPile := newD;
+                def lastDiscardCard := discardPile[discardPile.length];
+                if: (lastDiscardCard != nil) then: {
+                    cardsToReturn := cardsToReturn + [lastDiscardCard];
+                    def newDiscardPile := [];
+                    1.to: (discardPile.length - 1) do: { |x| newDiscardPile := newDiscardPile + [discardPile[x]]; };
+                    discardPile := newDiscardPile;
                 };
             };
-            hands.put(pid, getHand(pid) + cardsToReturn);
+            hands.put(playerId, getHand(playerId) + cardsToReturn);
         };
 
-        // =================================================================
-        // 8. GESTION DES JOUEURS
-        // =================================================================
         def passTurnNoDraw() {
             system.println("[PASS] Turn Pass (skip)");
             advanceTurn();
         };
 
         def advanceTurn() {
-            currentPlayerIndex := (currentPlayerIndex + 1) % activePlayers.length;
+            currentPlayerIndex := (currentPlayerIndex + 1) % activePlayers.length; // "fair turn"
             turnsToTake := nextTurnCount;
             nextTurnCount := 1;
             system.println("[TURN] Player " + getCurrentPlayer() + " (actions: " + turnsToTake + ")");
         };
 
-        def explosePlayer(pid) {
+        def explosePlayer(playerId) {
             def idxToRemove := -1;
             def i := 0;
-            activePlayers.each: { |p| if: (p == pid) then: { idxToRemove := i; }; i := i + 1; };
+            activePlayers.each: { |player|
+
+                if: (player == playerId) then: {
+                    idxToRemove := i;
+                    };
+
+                i := i + 1;
+                };
 
             if: (idxToRemove > -1) then: {
-                def hand := hands.get(pid);
+                def hand := hands.get(playerId);
                 if: (hand != nil) then: {
                     discardPile := discardPile + hand;
-                    hands.remove(pid);
+                    hands.remove(playerId);
                 };
 
                 def newActive := [];
-                activePlayers.each: { |p| if: (p != pid) then: { newActive := newActive + [p]; }; };
+                activePlayers.each: { |player|
+                    if: (player != playerId) then: {
+                        newActive := newActive + [player];
+                        };
+                    };
+
                 activePlayers := newActive;
-                deadPlayers := deadPlayers + [pid];
+                deadPlayers := deadPlayers + [playerId];
 
                 if: (idxToRemove < currentPlayerIndex) then: { currentPlayerIndex := currentPlayerIndex - 1; };
                 if: (currentPlayerIndex >= activePlayers.length) then: { currentPlayerIndex := 0; };
 
                 turnsToTake := 1;
                 nextTurnCount := 1;
-                system.println("[EXPLOSION] Player " + pid + " has EXPLODED!");
+                system.println("[EXPLOSION] Player " + playerId + " has EXPLODED ");
             };
         };
     };

@@ -11,20 +11,19 @@ import javax.swing.*;
 public class WeKittensApp implements HandAction {
     private final ATLocalInterface at;
 
-    // MODIFICATION 1 : frame et drawingView ne sont plus 'final' pour pouvoir être réinitialisés
-    private JFrame frame;
+    private JFrame frame; // not final to reinitialize it
     private DrawingView drawingView;
 
     private final HandView handsView;
     private final JLabel statusLabel;
 
-    // Liste réelle de la main
+    // real list of the hand just to display
     private final ArrayList<Card> internalCardList;
 
-    // Liste des cartes actuellement sélectionnées
+    // list of card actually selected by the player
     private final ArrayList<Card> selectedCards = new ArrayList<>();
 
-    // Stockage des index relatifs des morts
+    // DEADS relative positions storage:
     private final java.util.HashSet<Integer> deadOpponents = new java.util.HashSet<>();
 
     private boolean isDead = false;
@@ -34,7 +33,6 @@ public class WeKittensApp implements HandAction {
     public WeKittensApp(ATLocalInterface at) {
         this.at = at;
 
-        // MODIFICATION 2 : On utilise le champ de classe 'frame' (pas de 'JFrame frame = ...')
         frame = new JFrame("weKittens");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 
@@ -42,7 +40,7 @@ public class WeKittensApp implements HandAction {
         frame.setSize(480, 900);
         frame.setResizable(false);
 
-        // 1. HEADER
+        //HEADER
         JPanel statusPanel = new JPanel(new BorderLayout());
         statusPanel.setBackground(Color.DARK_GRAY);
         statusPanel.setPreferredSize(new Dimension(480, 40));
@@ -52,17 +50,16 @@ public class WeKittensApp implements HandAction {
         statusLabel.setForeground(Color.WHITE);
         statusLabel.setFont(new Font("Arial", Font.BOLD, 16));
 
-        // Le bouton Quitter (Rouge)
-        JButton btnLeave = new JButton("X");
+        JButton btnLeave = new JButton("LEAVE");
         btnLeave.setBackground(Color.RED);
         btnLeave.setForeground(Color.WHITE);
         btnLeave.setFocusPainted(false);
         btnLeave.setFont(new Font("Arial", Font.BOLD, 12));
-        btnLeave.setPreferredSize(new Dimension(45, 30));
+        btnLeave.setPreferredSize(new Dimension(85, 30));
         btnLeave.addActionListener(e -> {
             int choice = JOptionPane.showConfirmDialog(frame, "Leave session?", "Quit", JOptionPane.YES_NO_OPTION);
             if (choice == JOptionPane.YES_OPTION) {
-                if (at != null) {
+                if (at != null) { // call the ATLocalInterface to bind it to main.at
                     if (isDead) at.leaveSpectatingMode();
                     else at.leaveSession();
                 }
@@ -74,19 +71,18 @@ public class WeKittensApp implements HandAction {
 
         frame.add(statusPanel, BorderLayout.NORTH);
 
-        // 2. CENTER (Table de jeu)
+        // CENTER: (board)
         drawingView = new DrawingView();
         drawingView.setBackground(new Color(60, 60, 60));
         frame.add(drawingView, BorderLayout.CENTER);
 
-        // 3. FOOTER (Boutons + Main du joueur)
+        // FOOTER: button to play selection or draw + hand of the player
         JPanel bottomPanel = new JPanel();
         bottomPanel.setLayout(new BorderLayout());
 
         JPanel actionPanel = new JPanel();
         actionPanel.setBackground(new Color(50, 50, 50));
 
-        // BOUTON PIOCHE
         JButton btnDraw = new JButton("Draw Card (End Turn)");
         btnDraw.addActionListener(e -> {
             if (at != null) {
@@ -95,9 +91,8 @@ public class WeKittensApp implements HandAction {
             }
         });
 
-        // BOUTON JOUER LA SELECTION
         JButton btnPlay = new JButton("PLAY SELECTED");
-        btnPlay.setBackground(new Color(46, 204, 113)); // Vert
+        btnPlay.setBackground(new Color(46, 204, 113));
         btnPlay.setForeground(Color.WHITE);
         btnPlay.addActionListener(e -> executePlaySelected());
 
@@ -126,39 +121,36 @@ public class WeKittensApp implements HandAction {
 
     public void resetToLobby() {
         SwingUtilities.invokeLater(() -> {
-            // 1. Remettre le texte du haut
+            // reset statut:
             statusLabel.setText("Connexion...");
             statusLabel.setForeground(Color.WHITE);
 
-            // 2. REMPLACEMENT RADICAL DU TAPIS DE JEU
-            // On retire l'ancienne vue (qui contient la défausse)
+            // remove all the previous session:
             frame.remove(drawingView);
 
-            // On en crée une toute neuve (vide)
+            // create a new one:
             drawingView = new DrawingView();
             drawingView.setBackground(new Color(60, 60, 60));
             frame.add(drawingView, BorderLayout.CENTER);
 
-            // 3. Vider la main et la sélection
+
             clearHand();
             selectedCards.clear();
 
-            // 4. Réinitialiser les états internes
+            // Resert internal states:
             isDead = false;
             isVictory = false;
             deadOpponents.clear();
 
-            // 5. IMPORTANT : On remet le compteur d'adversaires à ZERO
-            // Cela efface les 3 joueurs que vous voyiez sur l'image
+            // reboot totalPlayers to 1 (our POV):
             initializeSession(1);
 
-            // 5. Force le rafraîchissement global de la fenêtre
             frame.revalidate();
             frame.repaint();
         });
     }
 
-    // --- LOGIQUE DE SELECTION ---
+
 
     private void toggleSelection(Card card, JComponent cardComponent) {
         if (selectedCards.contains(card)) {
@@ -182,7 +174,6 @@ public class WeKittensApp implements HandAction {
         });
     }
 
-    // --- LOGIQUE DE JEU ---
 
     private int countUniqueCards(ArrayList<Card> cards) {
         java.util.HashSet<String> uniqueKeys = new java.util.HashSet<>();
@@ -314,7 +305,6 @@ public class WeKittensApp implements HandAction {
         SwingUtilities.invokeLater(this::clearSelection);
     }
 
-    // --- UI HELPERS ---
 
     public void setTurnStatus(String message, boolean isMyTurn) {
         SwingUtilities.invokeLater(() -> {
@@ -414,7 +404,6 @@ public class WeKittensApp implements HandAction {
         });
     }
 
-    // --- POPUPS & MESSAGES ---
 
     public void showExplosionAlert(String variant) {
         SwingUtilities.invokeLater(() -> {

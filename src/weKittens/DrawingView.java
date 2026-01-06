@@ -29,7 +29,7 @@ public class DrawingView extends JPanel {
     private int leftPlayerCount = 3;
     private int rightPlayerCount = 3;
 
-    // Set pour mémoriser les positions "mortes"
+    // Set to store the deadPositions:
     private final Set<String> deadPositions = new HashSet<>();
 
     public DrawingView() {
@@ -48,10 +48,7 @@ public class DrawingView extends JPanel {
     public void setLeftPlayerCount(int c) { this.leftPlayerCount = c; }
     public void setRightPlayerCount(int c) { this.rightPlayerCount = c; }
 
-    /**
-     * Marque une position comme morte.
-     * Le repaint() déclenchera drawStack qui cachera les cartes.
-     */
+
     public void markDead(String position) {
         deadPositions.add(position);
         this.repaint();
@@ -63,13 +60,12 @@ public class DrawingView extends JPanel {
         double midX = width / 2.0;
         double midY = height / 2.0;
 
-        // 1. Dessin des piles adverses
-        // Si une position est marquée comme morte, drawStack ne dessinera rien.
+        // players:
         drawStack(g, Math.min(STACK_MAX_SIZE, topPlayerCount), (int) midX - CARD_SIZE_MID, CARD_MARGIN, 180, "TOP");
         drawStack(g, Math.min(STACK_MAX_SIZE, leftPlayerCount), CARD_MARGIN, (int) midY - CARD_SIZE_MID, 90, "LEFT");
         drawStack(g, Math.min(STACK_MAX_SIZE, rightPlayerCount), width - CARD_SIZE - CARD_MARGIN, (int) midY - CARD_SIZE_MID, -90, "RIGHT");
 
-        // 2. Dessin du tas joué (Défausse) au centre
+        // DiscardPile
         if (played > 1) {
             for (int i = 0; i < Math.min(STACK_MAX_SIZE, played) - 1; i++)
                 drawCardWithAngle(g, BLANK_CARD, (int) midX - CARD_SIZE_MID, (int) midY - CARD_SIZE_MID, randomAngle());
@@ -78,11 +74,8 @@ public class DrawingView extends JPanel {
     }
 
     private void drawStack(Graphics2D g, int count, int x, int y, int angle, String positionName) {
-        // --- MODIFICATION ICI ---
-        // Si le joueur à cette position est mort, on arrête tout de suite.
-        // On ne dessine ni cartes, ni croix. L'emplacement reste vide.
         if (deadPositions.contains(positionName)) {
-            return;
+            return; // draw nothing if dead position
         }
 
         for (int i = 0; i < count; i++) {
@@ -93,7 +86,6 @@ public class DrawingView extends JPanel {
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
-        // Dessin du fond d'écran
         g.drawImage(getBackgroundImage(), 0, 0, getWidth(), getHeight(), null);
         draw((Graphics2D) g);
     }
